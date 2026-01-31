@@ -3,3 +3,4 @@ click
 python-dotenv
 sqlalchemy
 pytest
+sqlite-vec

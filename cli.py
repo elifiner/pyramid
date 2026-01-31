@@ -1,9 +1,11 @@
 import click
+import sqlite3
 from datetime import datetime, UTC
 from sqlalchemy import create_engine, text
-from db import init_db, get_session, Observation, Model, Summary
+from db import init_db, get_session, get_engine, Observation, Model, Summary
 from llm import extract_observations
 from summarize import run_tier0_summarization, run_higher_tier_summarization, run_all_summarization
+from embeddings import get_embedding, enable_vec, serialize_embedding, EMBEDDING_DIM
 
 
 @click.group()
@@ -167,6 +169,77 @@ def model(name):
         click.echo(f'  {s.text}')
         click.echo()
     
+    session.close()
+
+
+@cli.command()
+@click.option('--limit', '-n', default=10, help='Number of results')
+def embed(limit):
+    session = get_session()
+    
+    conn = sqlite3.connect('memory.db')
+    enable_vec(conn)
+    
+    conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS observations_vec USING vec0(
+            observation_id INTEGER PRIMARY KEY,
+            embedding float[{EMBEDDING_DIM}]
+        )
+    """)
+    
+    existing = set(row[0] for row in conn.execute("SELECT observation_id FROM observations_vec").fetchall())
+    
+    observations = session.query(Observation).all()
+    to_embed = [o for o in observations if o.id not in existing]
+    
+    click.echo(f'Embedding {len(to_embed)} observations...')
+    
+    for i, obs in enumerate(to_embed):
+        embedding = get_embedding(obs.text)
+        conn.execute(
+            "INSERT INTO observations_vec (observation_id, embedding) VALUES (?, ?)",
+            [obs.id, serialize_embedding(embedding)]
+        )
+        if (i + 1) % 10 == 0:
+            click.echo(f'  {i + 1}/{len(to_embed)}')
+            conn.commit()
+    
+    conn.commit()
+    conn.close()
+    session.close()
+    click.echo(f'Done. {len(to_embed)} observations embedded.')
+
+
+@cli.command()
+@click.argument('query')
+@click.option('--limit', '-n', default=10, help='Number of results')
+def search(query, limit):
+    session = get_session()
+    
+    conn = sqlite3.connect('memory.db')
+    enable_vec(conn)
+    
+    query_embedding = get_embedding(query)
+    
+    results = conn.execute(f"""
+        SELECT observation_id, distance
+        FROM observations_vec
+        WHERE embedding MATCH ?
+        ORDER BY distance
+        LIMIT ?
+    """, [serialize_embedding(query_embedding), limit]).fetchall()
+    
+    if not results:
+        click.echo('No results. Run "embed" first to create embeddings.')
+        return
+    
+    for obs_id, distance in results:
+        obs = session.get(Observation, obs_id)
+        if obs:
+            model_name = obs.model.name if obs.model else '-'
+            click.echo(f'[{distance:.3f}] [{model_name}] {obs.text}')
+    
+    conn.close()
     session.close()
 
 
