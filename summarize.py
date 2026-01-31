@@ -154,6 +154,19 @@ def summarize_chunk(observations):
     return response.choices[0].message.content
 
 
+def summarize_summaries(summaries):
+    text = "\n---\n".join(s.text for s in summaries)
+    
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": SUMMARIZE_SYSTEM_PROMPT + "\n\nPreserve IMPORTANT/CRITICAL/ESSENTIAL markers from source summaries."},
+            {"role": "user", "content": f"Combine these summaries into one higher-level summary:\n\n{text}"}
+        ]
+    )
+    return response.choices[0].message.content
+
+
 def run_tier0_summarization(on_progress=None):
     session = get_session()
     
@@ -204,3 +217,83 @@ def run_tier0_summarization(on_progress=None):
     session.commit()
     session.close()
     return created
+
+
+def run_higher_tier_summarization(on_progress=None):
+    session = get_session()
+    models = session.query(Model).all()
+    
+    total_created = 0
+    
+    for model in models:
+        tier = 0
+        while True:
+            summaries = session.query(Summary).filter(
+                Summary.model_id == model.id,
+                Summary.tier == tier
+            ).order_by(Summary.start_timestamp).all()
+            
+            unsummarized = []
+            for s in summaries:
+                already_summarized = session.query(Summary).filter(
+                    Summary.model_id == model.id,
+                    Summary.tier == tier + 1,
+                    Summary.start_timestamp <= s.start_timestamp,
+                    Summary.end_timestamp >= s.end_timestamp
+                ).first()
+                if not already_summarized:
+                    unsummarized.append(s)
+            
+            if len(unsummarized) < STEP:
+                break
+            
+            for i in range(0, len(unsummarized) - STEP + 1, STEP):
+                chunk = unsummarized[i:i + STEP]
+                
+                start_ts = chunk[0].start_timestamp
+                end_ts = chunk[-1].end_timestamp
+                
+                existing = session.query(Summary).filter(
+                    Summary.model_id == model.id,
+                    Summary.tier == tier + 1,
+                    Summary.start_timestamp == start_ts,
+                    Summary.end_timestamp == end_ts
+                ).first()
+                
+                if existing:
+                    continue
+                
+                if on_progress:
+                    on_progress(f"T{tier + 1} [{model.name}] {start_ts.date()} - {end_ts.date()}...")
+                
+                summary_text = summarize_summaries(chunk)
+                
+                summary = Summary(
+                    model_id=model.id,
+                    tier=tier + 1,
+                    text=summary_text,
+                    start_timestamp=start_ts,
+                    end_timestamp=end_ts
+                )
+                session.add(summary)
+                total_created += 1
+            
+            session.commit()
+            tier += 1
+        
+        top_summary = session.query(Summary).filter(
+            Summary.model_id == model.id
+        ).order_by(Summary.tier.desc()).first()
+        
+        if top_summary and (not model.is_base or not model.description or model.description == BASE_MODELS.get(model.name)):
+            model.description = top_summary.text[:200] + "..." if len(top_summary.text) > 200 else top_summary.text
+    
+    session.commit()
+    session.close()
+    return total_created
+
+
+def run_all_summarization(on_progress=None):
+    tier0_count = run_tier0_summarization(on_progress)
+    higher_count = run_higher_tier_summarization(on_progress)
+    return tier0_count, higher_count

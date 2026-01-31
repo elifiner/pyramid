@@ -3,7 +3,7 @@ from datetime import datetime, UTC
 from sqlalchemy import create_engine, text
 from db import init_db, get_session, Observation, Model, Summary
 from llm import extract_observations
-from summarize import run_tier0_summarization
+from summarize import run_tier0_summarization, run_higher_tier_summarization, run_all_summarization
 
 
 @click.group()
@@ -106,10 +106,22 @@ def bootstrap(source, limit, conversation):
 
 
 @cli.command()
-def summarize():
-    click.echo('Running tier 0 summarization...')
-    created = run_tier0_summarization(on_progress=lambda msg: click.echo(f'  {msg}'))
-    click.echo(f'Created {created} tier 0 summaries')
+@click.option('--tier', '-t', default=None, type=int, help='Run only specific tier (0 for observations, omit for all)')
+def summarize(tier):
+    progress = lambda msg: click.echo(f'  {msg}')
+    
+    if tier == 0:
+        click.echo('Running tier 0 summarization...')
+        created = run_tier0_summarization(on_progress=progress)
+        click.echo(f'Created {created} tier 0 summaries')
+    elif tier is not None:
+        click.echo(f'Running tier {tier} summarization...')
+        created = run_higher_tier_summarization(on_progress=progress)
+        click.echo(f'Created {created} higher tier summaries')
+    else:
+        click.echo('Running full summarization...')
+        tier0, higher = run_all_summarization(on_progress=progress)
+        click.echo(f'Created {tier0} tier 0 + {higher} higher tier summaries')
 
 
 @cli.command()
@@ -123,6 +135,35 @@ def summaries(tier):
     for s in query.all():
         model_name = s.model.name if s.model else '-'
         click.echo(f'[T{s.tier}] {s.start_timestamp:%Y-%m-%d} - {s.end_timestamp:%Y-%m-%d} [{model_name}]')
+        click.echo(f'  {s.text}')
+        click.echo()
+    
+    session.close()
+
+
+@cli.command()
+@click.argument('name')
+def model(name):
+    session = get_session()
+    m = session.query(Model).filter_by(name=name).first()
+    
+    if not m:
+        click.echo(f'Model "{name}" not found.')
+        session.close()
+        return
+    
+    click.echo(f'Model: {m.name}')
+    click.echo(f'Description: {m.description or "(none)"}')
+    click.echo()
+    
+    summaries = session.query(Summary).filter_by(model_id=m.id).order_by(Summary.tier.desc(), Summary.start_timestamp.desc()).all()
+    
+    current_tier = None
+    for s in summaries:
+        if s.tier != current_tier:
+            current_tier = s.tier
+            click.echo(f'--- Tier {s.tier} ---')
+        click.echo(f'{s.start_timestamp:%Y-%m-%d} - {s.end_timestamp:%Y-%m-%d}')
         click.echo(f'  {s.text}')
         click.echo()
     
