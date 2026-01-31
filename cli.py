@@ -2,10 +2,11 @@ import click
 import sqlite3
 from datetime import datetime, UTC
 from sqlalchemy import create_engine, text
-from db import init_db, get_session, get_engine, Observation, Model, Summary
+from db import init_db, get_session, get_engine, Observation, Model
 from llm import extract_observations
 from summarize import run_tier0_summarization, run_higher_tier_summarization, run_all_summarization
 from embeddings import get_embedding, enable_vec, serialize_embedding, EMBEDDING_DIM
+from pyramid import get_pyramid
 
 
 @click.group()
@@ -158,16 +159,13 @@ def model(name):
     click.echo(f'Description: {m.description or "(none)"}')
     click.echo()
     
-    summaries = session.query(Summary).filter_by(model_id=m.id).order_by(Summary.tier.desc(), Summary.start_timestamp.desc()).all()
-    
-    current_tier = None
-    for s in summaries:
-        if s.tier != current_tier:
-            current_tier = s.tier
-            click.echo(f'--- Tier {s.tier} ---')
-        click.echo(f'{s.start_timestamp:%Y-%m-%d} - {s.end_timestamp:%Y-%m-%d}')
-        click.echo(f'  {s.text}')
-        click.echo()
+    by_tier = get_pyramid(session, m.id)
+    for tier in sorted(by_tier.keys(), reverse=True):
+        click.echo(f'--- Tier {tier} ---')
+        for s in by_tier[tier]:
+            click.echo(f'{s.start_timestamp:%Y-%m-%d} - {s.end_timestamp:%Y-%m-%d}')
+            click.echo(f'  {s.text}')
+            click.echo()
     
     session.close()
 
