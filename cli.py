@@ -77,9 +77,16 @@ def bootstrap(source, limit, conversation):
         click.echo('No messages to process.')
         return
     
+    def progress(chunk_num, total_chunks, msgs_in_chunk, timestamp, obs_count=None):
+        ts_str = timestamp[:10] if timestamp else '?'
+        if obs_count is None:
+            click.echo(f'  Chunk {chunk_num}/{total_chunks} ({msgs_in_chunk} msgs, {ts_str})...', nl=False)
+        else:
+            click.echo(f' {obs_count} obs')
+    
     click.echo('Extracting observations...')
-    observations = extract_observations(messages)
-    click.echo(f'Extracted {len(observations)} observations')
+    observations = extract_observations(messages, on_progress=progress)
+    click.echo(f'Total: {len(observations)} observations')
     
     session = get_session()
     for obs_data in observations:

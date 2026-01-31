@@ -75,13 +75,16 @@ def chunk_messages(messages, max_tokens=MAX_TOKENS):
     return chunks
 
 
-def extract_observations(messages):
+def extract_observations(messages, on_progress=None):
     chunks = chunk_messages(messages)
     all_observations = []
     
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         chunk_timestamp = chunk[-1].get('timestamp') if chunk else None
         conversation_text = "\n".join(f"{m['role']}: {m['content']}" for m in chunk if m['content'])
+        
+        if on_progress:
+            on_progress(i + 1, len(chunks), len(chunk), chunk_timestamp)
         
         response = client.chat.completions.create(
             model=MODEL,
@@ -93,10 +96,15 @@ def extract_observations(messages):
             tool_choice="auto"
         )
         
+        chunk_obs = 0
         for tool_call in response.choices[0].message.tool_calls or []:
             if tool_call.function.name == "add_observation":
                 args = json.loads(tool_call.function.arguments)
                 args['timestamp'] = chunk_timestamp
                 all_observations.append(args)
+                chunk_obs += 1
+        
+        if on_progress:
+            on_progress(i + 1, len(chunks), len(chunk), chunk_timestamp, chunk_obs)
     
     return all_observations

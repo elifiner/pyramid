@@ -51,13 +51,23 @@ def get_session(db_path='memory.db'):
     return Session()
 
 
+BASE_MODELS = {
+    'self': 'The agent - my capabilities, preferences, experiences, learnings',
+    'user': 'The primary user - their identity, preferences, projects, life',
+    'system': 'The technical environment - tools, setup, configurations',
+}
+
+
 def init_db(db_path='memory.db'):
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
     
     session = get_session(db_path)
-    for name in ['self', 'user', 'system']:
-        if not session.query(Model).filter_by(name=name).first():
-            session.add(Model(name=name, is_base=True))
+    for name, description in BASE_MODELS.items():
+        existing = session.query(Model).filter_by(name=name).first()
+        if not existing:
+            session.add(Model(name=name, description=description, is_base=True))
+        elif not existing.description:
+            existing.description = description
     session.commit()
     session.close()
