@@ -9,7 +9,7 @@ from llm import client, MODEL
 from sqlalchemy import func
 
 CORE_MODEL_FILES = {
-    'self': 'SOUL.md',
+    'assistant': 'SOUL.md',
     'user': 'USER.md',
     'system': 'TOOLS.md',
 }
@@ -52,13 +52,16 @@ def update_model_descriptions(session, on_progress=None):
 
 {sample_text}
 
-Write a 1-sentence description of what KIND of information belongs in this model.
-Focus on category/type, not specific content. Keep it under 100 characters."""
+Write a brief description (under 120 chars) with format: "[Who/What this is] - [what kind of info is stored]"
+Examples:
+- "Tony Ennis (coaching client) - business challenges, relationship dynamics, session notes"
+- "GrowthLab Consulting (business) - financials, pricing, client segments, service offerings"
+- "Corfu Travel (trip) - logistics, itinerary, health precautions, cultural notes\""""
             }]
         )
         desc = response.choices[0].message.content.strip()
-        if len(desc) > 100:
-            desc = desc[:97] + '...'
+        if len(desc) > 120:
+            desc = desc[:117] + '...'
         return model_id, desc
     
     results = {}

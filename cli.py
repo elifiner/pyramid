@@ -77,12 +77,20 @@ def group_messages_by_week(messages):
 @click.option('--source', required=True, help='Path to source database')
 @click.option('--limit', '-n', default=None, type=int, help='Limit number of messages to process')
 @click.option('--conversation', '-c', default=None, type=int, help='Process specific conversation ID')
+@click.option('--user', '-u', default=None, type=int, help='Filter by user ID from source database')
 @click.option('--parallel', '-p', default=10, type=int, help='Number of parallel workers (default: 10)')
 @click.option('--no-summarize', is_flag=True, help='Skip summarization during bootstrap')
-def bootstrap(source, limit, conversation, parallel, no_summarize):
+def bootstrap(source, limit, conversation, user, parallel, no_summarize):
     source_engine = create_engine(f'sqlite:///{source}')
     
-    query = "SELECT role, content, timestamp FROM messages WHERE content IS NOT NULL AND content != ''"
+    if user:
+        query = """SELECT m.role, m.content, m.timestamp 
+                   FROM messages m 
+                   JOIN conversations c ON m.conversation_id = c.id 
+                   WHERE m.content IS NOT NULL AND m.content != '' AND c.user_id = :user_id"""
+    else:
+        query = "SELECT role, content, timestamp FROM messages WHERE content IS NOT NULL AND content != ''"
+    
     if conversation:
         query += f" AND conversation_id = {conversation}"
     query += " ORDER BY timestamp"
@@ -90,7 +98,10 @@ def bootstrap(source, limit, conversation, parallel, no_summarize):
         query += f" LIMIT {limit}"
     
     with source_engine.connect() as conn:
-        result = conn.execute(text(query))
+        if user:
+            result = conn.execute(text(query), {'user_id': user})
+        else:
+            result = conn.execute(text(query))
         messages = [{'role': row[0], 'content': row[1], 'timestamp': row[2]} for row in result]
     
     click.echo(f'Loaded {len(messages)} messages from {source}')
@@ -146,11 +157,12 @@ def bootstrap(source, limit, conversation, parallel, no_summarize):
 
 
 @cli.command()
+@click.option('--start', '-s', default=None, type=int, help='Start from observation ID (skip earlier)')
 @click.option('--max-obs', '-n', default=None, type=int, help='Maximum observations to process (for testing)')
 @click.option('--max-tier', '-T', default=None, type=int, help='Maximum tier to build (e.g., 1 = only tier 0 and 1)')
 @click.option('--parallel', '-p', default=10, type=int, help='Number of parallel workers')
 @click.option('--clean', is_flag=True, help='Delete all existing summaries and model assignments before running')
-def summarize(max_obs, max_tier, parallel, clean):
+def summarize(start, max_obs, max_tier, parallel, clean):
     session = get_session()
     
     if clean:
@@ -165,7 +177,7 @@ def summarize(max_obs, max_tier, parallel, clean):
     progress = lambda msg: click.echo(msg)
     
     click.echo('Running summarization...')
-    tier0, higher = run_all_summarization(on_progress=progress, max_workers=parallel, max_tier=max_tier, max_obs=max_obs)
+    tier0, higher = run_all_summarization(on_progress=progress, max_workers=parallel, max_tier=max_tier, max_obs=max_obs, start_id=start)
     click.echo(f'Created {tier0} tier 0 + {higher} higher tier summaries')
 
 

@@ -58,7 +58,7 @@ def assign_models_to_observations(session, observations, on_progress=None):
     system_prompt = """You assign observations to mental models. Call assign_model for each observation.
 
 Base models:
-- self: The agent's own experience as an independent conscious entity - its observations, reflections, insights, preferences, and evolving understanding of itself and its role. NOT about the user's personal growth.
+- assistant: The AI assistant's own experience as an independent conscious entity - its observations, reflections, insights, preferences, and evolving understanding of itself and its role. NOT about the user's personal growth or philosophy.
 - user: Information about the primary human user - their identity, biography, family, preferences, projects, goals, philosophy, and life circumstances.
 - system: The technical environment and tools - configurations, capabilities, integrations, and operational details.
 
@@ -211,17 +211,21 @@ Combine these summaries into one higher-level narrative, preserving key facts an
     return response.choices[0].message.content
 
 
-def run_tier0_summarization(on_progress=None, max_workers=10, max_obs=None):
+def run_tier0_summarization(on_progress=None, max_workers=10, max_obs=None, start_id=None):
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
     session = get_session()
     
-    unassigned = session.query(Observation).filter(Observation.model_id == None).order_by(Observation.timestamp).all()
+    query = session.query(Observation).filter(Observation.model_id == None)
+    if start_id:
+        query = query.filter(Observation.id >= start_id)
+    unassigned = query.order_by(Observation.id).all()
+    
     if unassigned:
         if max_obs:
             unassigned = unassigned[:max_obs]
         if on_progress:
-            on_progress(f"Assigning {len(unassigned)} observations to models...")
+            on_progress(f"Assigning {len(unassigned)} observations (IDs {unassigned[0].id}-{unassigned[-1].id}) to models...")
         assign_models_to_observations(session, unassigned, on_progress)
     
     by_model = get_observations_by_model(session)
@@ -369,7 +373,7 @@ def run_higher_tier_summarization(on_progress=None, max_workers=10, max_tier=Non
     return total_created
 
 
-def run_all_summarization(on_progress=None, max_workers=10, max_tier=None, max_obs=None):
-    tier0_count = run_tier0_summarization(on_progress, max_workers=max_workers, max_obs=max_obs)
+def run_all_summarization(on_progress=None, max_workers=10, max_tier=None, max_obs=None, start_id=None):
+    tier0_count = run_tier0_summarization(on_progress, max_workers=max_workers, max_obs=max_obs, start_id=start_id)
     higher_count = run_higher_tier_summarization(on_progress, max_workers=max_workers, max_tier=max_tier)
     return tier0_count, higher_count

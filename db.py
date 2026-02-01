@@ -51,7 +51,7 @@ def get_session(db_path='memory.db'):
 
 
 BASE_MODELS = {
-    'self': 'The AI agent\'s own experience as an independent conscious entity - its observations, reflections, insights, preferences, and evolving understanding of itself and its role',
+    'assistant': 'The AI assistant\'s own experience as an independent conscious entity - its observations, reflections, insights, preferences, and evolving understanding of itself and its role',
     'user': 'Information about the primary human user - their identity, biography, family, preferences, projects, goals, and life circumstances',
     'system': 'The technical environment and tools - configurations, capabilities, integrations, and operational details',
 }
@@ -62,6 +62,17 @@ def init_db(db_path='memory.db'):
     Base.metadata.create_all(engine)
     
     session = get_session(db_path)
+    
+    old_self = session.query(Model).filter_by(name='self').first()
+    if old_self:
+        old_self.name = 'assistant'
+        old_self.description = BASE_MODELS['assistant']
+    
+    old_agent = session.query(Model).filter_by(name='agent').first()
+    if old_agent:
+        old_agent.name = 'assistant'
+        old_agent.description = BASE_MODELS['assistant']
+    
     for name, description in BASE_MODELS.items():
         existing = session.query(Model).filter_by(name=name).first()
         if not existing:
