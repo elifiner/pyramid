@@ -55,12 +55,11 @@ def assign_models_to_observations(session, observations, on_progress=None):
     if not observations:
         return
     
-    system_prompt = """You assign observations to mental models. Call assign_model for each observation.
+    base_models_text = "\n".join(f"- {name}: {desc}" for name, desc in BASE_MODELS.items())
+    system_prompt = f"""You assign observations to mental models. Call assign_model for each observation.
 
 Base models:
-- assistant: The AI assistant's own experience as an independent conscious entity - its observations, reflections, insights, preferences, and evolving understanding of itself and its role. NOT about the user's personal growth or philosophy.
-- user: Information about the primary human user - their identity, biography, family, preferences, projects, goals, philosophy, and life circumstances.
-- system: The technical environment and tools - configurations, capabilities, integrations, and operational details.
+{base_models_text}
 
 Create new models for distinct entities (specific people, projects, topics) only when you see 
 multiple observations about them in the current batch. If an observation doesn't fit well 
