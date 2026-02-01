@@ -21,43 +21,59 @@ TIER_LABELS = {
 }
 
 
-def derive_model_purpose(session, model):
-    samples = session.query(Observation).filter(
-        Observation.model_id == model.id
-    ).order_by(func.random()).limit(10).all()
+def update_model_descriptions(session, on_progress=None):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     
-    if not samples:
-        return None
+    models = session.query(Model).filter(
+        (Model.description == None) | (Model.description == '')
+    ).filter(Model.is_base == False).all()
     
-    sample_text = "\n".join(f"- {s.text}" for s in samples)
+    if not models:
+        return
     
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{
-            "role": "user", 
-            "content": f"""These observations are stored under the model '{model.name}':
+    if on_progress:
+        on_progress(f"Deriving descriptions for {len(models)} models...")
+    
+    def derive_one(model_id, model_name):
+        samples = session.query(Observation).filter(
+            Observation.model_id == model_id
+        ).order_by(func.random()).limit(10).all()
+        
+        if not samples:
+            return model_id, None
+        
+        sample_text = "\n".join(f"- {s.text}" for s in samples)
+        
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{
+                "role": "user", 
+                "content": f"""These observations are stored under the model '{model_name}':
 
 {sample_text}
 
 Write a 1-sentence description of what KIND of information belongs in this model.
 Focus on category/type, not specific content. Keep it under 100 characters."""
-        }]
-    )
-    desc = response.choices[0].message.content.strip()
-    if len(desc) > 100:
-        desc = desc[:97] + '...'
-    return desc
-
-
-def update_model_descriptions(session):
-    models = session.query(Model).filter(
-        (Model.description == None) | (Model.description == '')
-    ).filter(Model.is_base == False).all()
+            }]
+        )
+        desc = response.choices[0].message.content.strip()
+        if len(desc) > 100:
+            desc = desc[:97] + '...'
+        return model_id, desc
+    
+    results = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(derive_one, m.id, m.name): m for m in models}
+        for i, future in enumerate(as_completed(futures), 1):
+            model = futures[future]
+            model_id, desc = future.result()
+            results[model_id] = desc
+            if on_progress:
+                on_progress(f"  [{i}/{len(models)}] {model.name}")
     
     for model in models:
-        description = derive_model_purpose(session, model)
-        if description:
-            model.description = description
+        if results.get(model.id):
+            model.description = results[model.id]
     
     session.commit()
 
@@ -122,7 +138,7 @@ def export_models(workspace, db_path='memory.db', force=False, debug=False, do_s
     session = get_session(db_path)
     cache = load_cache(workspace)
     
-    update_model_descriptions(session)
+    update_model_descriptions(session, on_progress)
     
     models = session.query(Model).all()
     
