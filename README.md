@@ -318,7 +318,14 @@ Generate embeddings for all observations and summaries.
 
 ```bash
 python cli.py embed
+python cli.py embed --parallel 20  # More parallel workers
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--parallel` | Number of parallel workers for batch processing (default: 10) |
+
+Embeddings are batched by token count (max 250k tokens per request) and processed in parallel.
 
 ### `search`
 Semantic search across memory.
@@ -421,21 +428,39 @@ Vector embedding utilities.
 
 - `EMBEDDING_MODEL` - Model name
 - `EMBEDDING_DIM` - Dimension count (1536)
-- `get_embedding(text)` - Generate embedding
+- `MAX_TOKENS_PER_REQUEST` - Token limit per API call (250k)
+- `estimate_tokens(text)` - Estimate token count
+- `batch_by_tokens(texts, max_tokens)` - Split texts into token-limited batches
+- `get_embedding(text)` - Generate single embedding
+- `embed_many(texts, max_workers, on_progress)` - Batch embed with parallel processing
 - `serialize_embedding(embedding)` - Convert to bytes
 - `deserialize_embedding(blob)` - Convert bytes to list
 - `enable_vec(conn)` - Load sqlite-vec extension
-- `create_vec_table(conn, table_name, dim)` - Create virtual table
-- `search_similar(conn, table_name, query_embedding, limit)` - Vector search
+- `init_memory_vec(conn)` - Create memory_vec virtual table
+- `get_existing_embeddings(conn)` - Get already embedded items
+- `store_embeddings(conn, items, embeddings)` - Store embeddings in database
+- `search_memory(conn, query_text, limit)` - Search memory by text query
 
-### `cli.py` (generate functions)
+### `loaders.py`
+Message loading from various formats.
+
+- `get_week_key(timestamp_str)` - Extract ISO week key from timestamp
+- `group_messages_by_week(messages)` - Group messages by week
+- `load_glenn_messages(source, conversation, user, limit)` - Load from Glenn SQLite format
+- `load_claude_messages(source, limit)` - Load from Claude JSON export
+
+### `generate.py`
 Markdown generation with synthesis.
 
 - `CORE_MODEL_FILES` - Mapping of base models to filenames
 - `TIER_LABELS` - Display labels for tiers
-- `update_model_descriptions(session)` - Fill in missing descriptions
+- `update_model_descriptions(session, on_progress)` - Fill in missing descriptions
 - `render_memory_index(core_models, other_models)` - Generate index
+- `render_model(data, do_synthesize, debug)` - Render single model to markdown
 - `export_models(workspace, db_path, debug, do_synthesize, on_progress)` - Main export function
+
+### `cli.py`
+Command-line interface (thin wrapper over logic modules).
 
 ## Processing Flow
 
@@ -486,7 +511,26 @@ STEP = 10
 # embeddings.py
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
+MAX_TOKENS_PER_REQUEST = 250000
 ```
+
+## Testing
+
+Tests are in the `test/` directory. Run with pytest:
+
+```bash
+pytest test/ -v
+```
+
+| File | Coverage |
+|------|----------|
+| `test_db.py` | ORM models, relationships |
+| `test_llm.py` | Token estimation, message chunking |
+| `test_summarize.py` | Observation grouping, chunking |
+| `test_pyramid.py` | Pyramid retrieval, time bucketing |
+| `test_embeddings.py` | Serialization, constants |
+| `test_loaders.py` | Message loading, week grouping |
+| `test_generate.py` | Index rendering, constants |
 
 ## Dependencies
 

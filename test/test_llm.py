@@ -8,6 +8,10 @@ def test_estimate_tokens():
     assert tokens == len(text) // 4
 
 
+def test_estimate_tokens_empty():
+    assert estimate_tokens("") == 0
+
+
 def test_chunk_messages_single_chunk():
     messages = [
         {'role': 'user', 'content': 'Hello'},
@@ -32,3 +36,10 @@ def test_chunk_messages_splits_large():
 def test_chunk_messages_empty():
     chunks = chunk_messages([])
     assert chunks == []
+
+
+def test_chunk_messages_preserves_order():
+    messages = [{'role': 'user', 'content': f'Message {i}'} for i in range(5)]
+    chunks = chunk_messages(messages)
+    all_msgs = [m for chunk in chunks for m in chunk]
+    assert all_msgs == messages

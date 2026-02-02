@@ -1,21 +1,6 @@
 import pytest
 from datetime import datetime, UTC
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from db import Base, Model, Observation, Summary
-
-
-@pytest.fixture
-def session():
-    engine = create_engine('sqlite:///:memory:')
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    sess = Session()
-    for name in ['assistant', 'user']:
-        sess.add(Model(name=name, is_base=True))
-    sess.commit()
-    yield sess
-    sess.close()
+from db import Model, Observation, Summary
 
 
 def test_base_models_created(session):
@@ -34,9 +19,8 @@ def test_add_observation_without_model(session):
     assert obs.model is None
 
 
-def test_add_observation_with_model(session):
-    model = session.query(Model).filter_by(name='assistant').first()
-    obs = Observation(text='I learned something new', model_id=model.id, timestamp=datetime.now(UTC))
+def test_add_observation_with_model(session, assistant_model):
+    obs = Observation(text='I learned something new', model_id=assistant_model.id, timestamp=datetime.now(UTC))
     session.add(obs)
     session.commit()
     
@@ -52,22 +36,20 @@ def test_create_custom_model(session):
     assert not model.is_base
 
 
-def test_model_has_observations(session):
-    model = session.query(Model).filter_by(name='user').first()
-    obs1 = Observation(text='Eli asked for help', model_id=model.id, timestamp=datetime.now(UTC))
-    obs2 = Observation(text='Eli prefers simple code', model_id=model.id, timestamp=datetime.now(UTC))
+def test_model_has_observations(session, user_model):
+    obs1 = Observation(text='Eli asked for help', model_id=user_model.id, timestamp=datetime.now(UTC))
+    obs2 = Observation(text='Eli prefers simple code', model_id=user_model.id, timestamp=datetime.now(UTC))
     session.add_all([obs1, obs2])
     session.commit()
     
-    session.refresh(model)
-    assert len(model.observations) == 2
+    session.refresh(user_model)
+    assert len(user_model.observations) == 2
 
 
-def test_add_summary(session):
-    model = session.query(Model).filter_by(name='assistant').first()
+def test_add_summary(session, assistant_model):
     now = datetime.now(UTC)
     summary = Summary(
-        model_id=model.id,
+        model_id=assistant_model.id,
         tier=0,
         text='Learned about memory systems. IMPORTANT: pyramidal structure.',
         start_timestamp=now,
@@ -78,3 +60,14 @@ def test_add_summary(session):
     
     assert summary.id is not None
     assert summary.model.name == 'assistant'
+
+
+def test_summary_tiers(session, user_model):
+    now = datetime.now(UTC)
+    t0 = Summary(model_id=user_model.id, tier=0, text='Tier 0', start_timestamp=now, end_timestamp=now)
+    t1 = Summary(model_id=user_model.id, tier=1, text='Tier 1', start_timestamp=now, end_timestamp=now)
+    session.add_all([t0, t1])
+    session.commit()
+    
+    summaries = session.query(Summary).filter_by(model_id=user_model.id).order_by(Summary.tier).all()
+    assert [s.tier for s in summaries] == [0, 1]
