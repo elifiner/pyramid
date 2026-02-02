@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A pyramidal memory system for AI agents. Extracts observations from conversations, organizes them into mental models (self, user, system, topics), compresses them into tiered summaries, and synthesizes coherent narratives. Query via semantic search or export to markdown files for full context loading in OpenClaw type agents.
+A pyramidal memory system for AI agents. Extracts observations from conversations, organizes them into mental models (assistant, user, and discovered topics), compresses them into tiered summaries, and synthesizes coherent narratives. Query via semantic search or export to markdown files for full context loading in OpenClaw type agents.
 
 ```bash
 pip install -r requirements.txt
@@ -29,7 +29,7 @@ Pyramid Memory implements a hierarchical memory system designed for AI agents to
 │  Tier 0: 10 obs → Tier 1: 10 T0 → Tier 2: 10 T1 → ...      │
 ├─────────────────────────────────────────────────────────────┤
 │                    ORGANIZATION LAYER                       │
-│  Mental models: self, user, system, + discovered topics     │
+│  Mental models: assistant, user, + discovered topics        │
 ├─────────────────────────────────────────────────────────────┤
 │                    EXTRACTION LAYER                         │
 │  LLM tool calls extract observations from conversations     │
@@ -67,16 +67,15 @@ Categories that organize observations and summaries. Each model represents a con
 **Base models (always present):**
 | Name | Purpose |
 |------|---------|
-| `self` | Agent's capabilities, preferences, experiences, learnings |
+| `assistant` | Agent's own experience, reflections, insights, preferences, evolving self-understanding |
 | `user` | Primary user's identity, preferences, projects, life events |
-| `system` | Technical environment: tools, configurations, software setup |
 
 **Discovered models:** Created automatically during summarization when the LLM identifies distinct entities (specific people, projects, companies, topics) that warrant separate tracking.
 
 **Schema:**
 - `name`: String, unique identifier (lowercase, hyphenated)
 - `description`: String, derived from highest-tier summary
-- `is_base`: Boolean, true for self/user/system
+- `is_base`: Boolean, true for assistant/user
 
 **Model assignment behavior:**
 - Unassigned observations are processed before tier-0 summarization
@@ -147,7 +146,7 @@ When exporting to markdown for OpenClaw agents, the pyramid and any unsummarized
 - Newer details override older ones (e.g., if location changes, use most recent)
 - Duplicate facts are mentioned only once per section
 - Each section is self-contained to avoid cross-section repetition
-- Output is third-person narrative prose
+- Output is third-person narrative prose (except `assistant` model which uses first-person)
 
 ## Database Schema
 
@@ -227,7 +226,7 @@ CREATE VIRTUAL TABLE memory_vec USING vec0(
     "name": "assign_model",
     "parameters": {
         "observation_id": {"type": "integer"},
-        "model_name": {"type": "string", "description": "self, user, system, or new topic name"}
+        "model_name": {"type": "string", "description": "assistant, user, or new topic name"}
     }
 }
 ```
@@ -339,13 +338,12 @@ python cli.py search "user's family" --limit 10 --raw
 The `generate` command generates markdown files from models for workspace integration. By default, it synthesizes each model's pyramid into coherent narrative prose.
 
 ```bash
-python cli.py generate /path/to/workspace --db memory.db --force
+python cli.py generate /path/to/workspace --db memory.db
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--db` | Path to database file (default: memory.db) |
-| `--force` | Force regenerate all files |
 | `--debug` | Include source info (tier, id, date range) |
 | `--no-synthesize` | Skip LLM synthesis, just concatenate summaries |
 
@@ -355,7 +353,6 @@ python cli.py generate /path/to/workspace --db memory.db --force
 |-------|------|
 | `self` | `SOUL.md` |
 | `user` | `USER.md` |
-| `system` | `TOOLS.md` |
 | (other) | `models/{name}.md` |
 | (index) | `MEMORY.md` |
 
@@ -379,11 +376,7 @@ The synthesized content:
 - Deduplicates repeated facts
 - Uses newer details over older ones
 - Preserves important historical context
-- Written in third-person narrative prose
-
-### Caching
-
-Uses `.memory_cache.json` to track content hashes and skip unchanged files.
+- Written in third-person narrative prose (first-person for `assistant`)
 
 ## Module Reference
 
@@ -442,7 +435,7 @@ Markdown generation with synthesis.
 - `TIER_LABELS` - Display labels for tiers
 - `update_model_descriptions(session)` - Fill in missing descriptions
 - `render_memory_index(core_models, other_models)` - Generate index
-- `export_models(workspace, db_path, force, debug, do_synthesize, on_progress)` - Main export function
+- `export_models(workspace, db_path, debug, do_synthesize, on_progress)` - Main export function
 
 ## Processing Flow
 

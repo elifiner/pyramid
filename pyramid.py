@@ -101,6 +101,11 @@ def synthesize_model(name, description, by_tier, unsummarized_obs=None, ref_date
     if not sections:
         return None
     
+    if name == 'assistant':
+        voice = "first person (I, me, my) as the AI assistant reflecting on my own experience"
+    else:
+        voice = "third person narrative prose"
+    
     prompt = f"""Synthesize this information about '{name}' into a coherent mental model.
 
 Model purpose: {description or 'Not specified'}
@@ -111,7 +116,7 @@ Content is organized by recency. Rules:
 - Only include sections that have content
 - Within each section, synthesize and deduplicate the information
 - Newer details override older ones (e.g., if age changes, use the most recent)
-- Write in third person narrative prose
+- Write in {voice}
 - Each section should be self-contained but avoid repetition across sections
 
 Content:

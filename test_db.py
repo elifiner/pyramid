@@ -11,7 +11,7 @@ def session():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     sess = Session()
-    for name in ['self', 'user', 'system']:
+    for name in ['assistant', 'user']:
         sess.add(Model(name=name, is_base=True))
     sess.commit()
     yield sess
@@ -21,7 +21,7 @@ def session():
 def test_base_models_created(session):
     models = session.query(Model).filter_by(is_base=True).all()
     names = {m.name for m in models}
-    assert names == {'self', 'user', 'system'}
+    assert names == {'assistant', 'user'}
 
 
 def test_add_observation_without_model(session):
@@ -35,12 +35,12 @@ def test_add_observation_without_model(session):
 
 
 def test_add_observation_with_model(session):
-    model = session.query(Model).filter_by(name='self').first()
+    model = session.query(Model).filter_by(name='assistant').first()
     obs = Observation(text='I learned something new', model_id=model.id, timestamp=datetime.now(UTC))
     session.add(obs)
     session.commit()
     
-    assert obs.model.name == 'self'
+    assert obs.model.name == 'assistant'
 
 
 def test_create_custom_model(session):
@@ -64,7 +64,7 @@ def test_model_has_observations(session):
 
 
 def test_add_summary(session):
-    model = session.query(Model).filter_by(name='self').first()
+    model = session.query(Model).filter_by(name='assistant').first()
     now = datetime.now(UTC)
     summary = Summary(
         model_id=model.id,
@@ -77,4 +77,4 @@ def test_add_summary(session):
     session.commit()
     
     assert summary.id is not None
-    assert summary.model.name == 'self'
+    assert summary.model.name == 'assistant'

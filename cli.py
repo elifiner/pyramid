@@ -1,7 +1,6 @@
 import click
 import sqlite3
 import json
-import hashlib
 from pathlib import Path
 from datetime import datetime, UTC
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -331,7 +330,6 @@ def search(query, limit, raw):
 CORE_MODEL_FILES = {
     'assistant': 'SOUL.md',
     'user': 'USER.md',
-    'system': 'TOOLS.md',
 }
 
 TIER_LABELS = {
@@ -372,9 +370,9 @@ def update_model_descriptions(session, on_progress=None):
 
 Write a brief description (under 120 chars) with format: "[Who/What this is] - [what kind of info is stored]"
 Examples:
-- "Tony Ennis (coaching client) - business challenges, relationship dynamics, session notes"
-- "GrowthLab Consulting (business) - financials, pricing, client segments, service offerings"
-- "Corfu Travel (trip) - logistics, itinerary, health precautions, cultural notes\""""
+- "Marcus Chen (mentee) - career goals, skill development, meeting notes"
+- "Sunrise Bakery (business) - recipes, suppliers, seasonal menu planning"
+- "Japan 2025 (trip) - flights, accommodations, restaurant reservations, packing list\""""
             }]
         )
         desc = response.choices[0].message.content.strip()
@@ -423,39 +421,14 @@ def render_memory_index(core_models, other_models):
     return '\n'.join(lines)
 
 
-def content_hash(content):
-    return hashlib.sha256(content.encode()).hexdigest()[:16]
-
-
-def load_cache(workspace):
-    cache_file = workspace / '.memory_cache.json'
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
-    return {}
-
-
-def save_cache(workspace, cache):
-    cache_file = workspace / '.memory_cache.json'
-    cache_file.write_text(json.dumps(cache))
-
-
-def write_if_changed(path, content, cache, force=False):
-    h = content_hash(content)
-    cache_key = str(path)
-    
-    if not force and cache.get(cache_key) == h and path.exists():
-        return False
-    
+def write_file(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
-    cache[cache_key] = h
-    return True
 
 
-def export_models(workspace, db_path='memory.db', force=False, debug=False, do_synthesize=True, on_progress=None):
+def export_models(workspace, db_path='memory.db', debug=False, do_synthesize=True, on_progress=None):
     workspace = Path(workspace)
     session = get_session(db_path)
-    cache = load_cache(workspace)
     
     update_model_descriptions(session, on_progress)
     
@@ -559,7 +532,6 @@ def export_models(workspace, db_path='memory.db', force=False, debug=False, do_s
         for data in model_data:
             results[data['name']] = render_one(data)
     
-    changed = 0
     for data in model_data:
         content = results[data['name']]
         path = workspace / data['filename']
@@ -569,28 +541,21 @@ def export_models(workspace, db_path='memory.db', force=False, debug=False, do_s
         else:
             other_models.append((data, data['filename']))
         
-        if write_if_changed(path, content, cache, force):
-            changed += 1
+        write_file(path, content)
     
     memory_content = render_memory_index(core_models, other_models)
-    if write_if_changed(workspace / 'MEMORY.md', memory_content, cache, force):
-        changed += 1
-    
-    save_cache(workspace, cache)
-    
-    return changed
+    write_file(workspace / 'MEMORY.md', memory_content)
 
 
 @cli.command(help='Generate markdown files from models.')
 @click.argument('workspace')
 @click.option('--db', default='memory.db', help='Path to database file')
-@click.option('--force', is_flag=True, help='Force regenerate all files')
 @click.option('--debug', is_flag=True, help='Include source info (tier, id, date range)')
 @click.option('--no-synthesize', is_flag=True, help='Skip LLM synthesis, just concatenate summaries')
-def generate(workspace, db, force, debug, no_synthesize):
+def generate(workspace, db, debug, no_synthesize):
     progress = lambda msg: click.echo(msg)
-    changed = export_models(workspace, db, force, debug, do_synthesize=not no_synthesize, on_progress=progress)
-    click.echo(f'Updated {changed} files')
+    export_models(workspace, db, debug, do_synthesize=not no_synthesize, on_progress=progress)
+    click.echo('Done')
 
 
 if __name__ == '__main__':

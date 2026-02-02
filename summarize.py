@@ -23,7 +23,7 @@ ASSIGN_MODEL_TOOL = {
             "type": "object",
             "properties": {
                 "observation_id": {"type": "integer"},
-                "model_name": {"type": "string", "description": "Model name: self, user, system, or a new topic name"}
+                "model_name": {"type": "string", "description": "Model name: assistant, user, or a new topic name"}
             },
             "required": ["observation_id", "model_name"]
         }

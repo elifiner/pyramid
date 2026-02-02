@@ -53,7 +53,6 @@ def get_session(db_path='memory.db'):
 BASE_MODELS = {
     'assistant': 'The AI assistant\'s own experience as an independent conscious entity - its observations, reflections, insights, preferences, and evolving understanding of itself and its role',
     'user': 'Information about the primary human user - their identity, biography, family, preferences, projects, goals, and life circumstances',
-    'system': 'The technical environment and tools - configurations, capabilities, integrations, and operational details',
 }
 
 

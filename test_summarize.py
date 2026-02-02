@@ -12,7 +12,7 @@ def session():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     sess = Session()
-    for name in ['self', 'user', 'system']:
+    for name in ['assistant', 'user']:
         sess.add(Model(name=name, is_base=True))
     sess.commit()
     yield sess
