@@ -62,16 +62,33 @@ def bucket_by_time(items, ref_date):
     return buckets
 
 
-def synthesize_model(name, description, by_tier, unsummarized_obs=None, ref_date=None):
-    all_items = []
+def get_non_overlapping_summaries(by_tier):
+    result = []
+    higher_tier_max_end = None
     
     for tier in sorted(by_tier.keys(), reverse=True):
-        for s in by_tier[tier]:
-            all_items.append({
-                'end_timestamp': s['end_timestamp'],
-                'text': s['text'],
-                'tier': tier
-            })
+        current_tier_max_end = None
+        
+        for s in sorted(by_tier[tier], key=lambda x: x['end_timestamp'], reverse=True):
+            end = s['end_timestamp']
+            
+            if higher_tier_max_end is None or end > higher_tier_max_end:
+                result.append({
+                    'end_timestamp': end,
+                    'start_timestamp': s.get('start_timestamp') or end,
+                    'text': s['text'],
+                    'tier': tier
+                })
+                current_tier_max_end = max(current_tier_max_end or end, end)
+        
+        if current_tier_max_end:
+            higher_tier_max_end = max(higher_tier_max_end or current_tier_max_end, current_tier_max_end)
+    
+    return result
+
+
+def synthesize_model(name, description, by_tier, unsummarized_obs=None, ref_date=None):
+    all_items = get_non_overlapping_summaries(by_tier)
     
     if unsummarized_obs:
         for text, ts in unsummarized_obs:

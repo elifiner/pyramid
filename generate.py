@@ -195,7 +195,7 @@ def export_models(workspace, db_path='pyramid.db', debug=False, do_synthesize=Tr
         model_data.append({
             'name': model.name,
             'description': model.description,
-            'by_tier': {tier: [{'text': s.text, 'end_timestamp': s.end_timestamp} for s in sums] 
+            'by_tier': {tier: [{'text': s.text, 'start_timestamp': s.start_timestamp, 'end_timestamp': s.end_timestamp} for s in sums] 
                         for tier, sums in by_tier.items()},
             'unsummarized': [o.text for o in unsummarized],
             'unsummarized_ts': [o.timestamp for o in unsummarized],

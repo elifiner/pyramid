@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, UTC, timedelta
 from db import Observation, Summary
-from pyramid import get_pyramid, get_unsummarized_observations, bucket_by_time, TIME_BUCKETS
+from pyramid import get_pyramid, get_unsummarized_observations, bucket_by_time, TIME_BUCKETS, get_non_overlapping_summaries
 
 
 def test_get_pyramid_empty(session, user_model):
@@ -102,3 +102,46 @@ def test_bucket_by_time_all_buckets():
 def test_time_buckets_structure():
     labels = [label for label, _ in TIME_BUCKETS]
     assert labels == ['Last 3 Days', 'This Week', 'This Month', 'This Quarter', 'This Year', 'Earlier']
+
+
+def test_get_non_overlapping_summaries_skips_covered():
+    by_tier = {
+        2: [
+            {'text': 'tier2', 'start_timestamp': datetime(2025, 5, 1), 'end_timestamp': datetime(2026, 1, 31)},
+        ],
+        1: [
+            {'text': 'tier1 covered', 'start_timestamp': datetime(2025, 6, 1), 'end_timestamp': datetime(2025, 7, 1)},
+            {'text': 'tier1 newer', 'start_timestamp': datetime(2026, 1, 31), 'end_timestamp': datetime(2026, 2, 1)},
+        ],
+        0: [
+            {'text': 'tier0 covered', 'start_timestamp': datetime(2025, 6, 15), 'end_timestamp': datetime(2025, 6, 15)},
+            {'text': 'tier0 newest', 'start_timestamp': datetime(2026, 2, 1), 'end_timestamp': datetime(2026, 2, 2)},
+        ],
+    }
+    
+    result = get_non_overlapping_summaries(by_tier)
+    texts = [item['text'] for item in result]
+    
+    assert 'tier2' in texts
+    assert 'tier1 newer' in texts
+    assert 'tier0 newest' in texts
+    assert 'tier1 covered' not in texts
+    assert 'tier0 covered' not in texts
+    assert len(result) == 3
+
+
+def test_get_non_overlapping_summaries_empty():
+    result = get_non_overlapping_summaries({})
+    assert result == []
+
+
+def test_get_non_overlapping_summaries_single_tier():
+    by_tier = {
+        0: [
+            {'text': 'first', 'start_timestamp': datetime(2026, 1, 1), 'end_timestamp': datetime(2026, 1, 1)},
+            {'text': 'second', 'start_timestamp': datetime(2026, 1, 2), 'end_timestamp': datetime(2026, 1, 2)},
+        ],
+    }
+    
+    result = get_non_overlapping_summaries(by_tier)
+    assert len(result) == 2

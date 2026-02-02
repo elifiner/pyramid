@@ -192,7 +192,12 @@ This structure ensures:
 
 ### Model Synthesis
 
-When exporting to markdown for 🦞 OpenClaw agents, the pyramid and any unsummarized observations are synthesized into a coherent mental model organized by **temporal sections**:
+When exporting to markdown for 🦞 OpenClaw agents, the pyramid and any unsummarized observations are synthesized into a coherent mental model organized by **temporal sections**.
+
+**Deduplication**: Summaries from different tiers cover overlapping time periods by design (a tier-2 summary contains the same information as the tier-1 and tier-0 summaries it was created from). To avoid sending redundant content to the LLM, synthesis uses `get_non_overlapping_summaries()` which:
+1. Includes all summaries from the highest tier
+2. For lower tiers, only includes summaries whose end_timestamp exceeds all higher-tier coverage
+3. Result: recent periods use lower tiers (more detail), older periods use higher tiers (already compressed)
 
 | Section | Time Range |
 |---------|------------|
@@ -603,6 +608,7 @@ Pyramid retrieval and synthesis.
 
 - `get_pyramid(session, model_id)` - Returns dict of tier → summaries
 - `get_unsummarized_observations(session, model_id, by_tier)` - Get observations not yet in tier 0
+- `get_non_overlapping_summaries(by_tier)` - Filter summaries to avoid tier overlap (uses highest tier for older content, lower tiers only for recent content not yet covered)
 - `synthesize_model(name, description, by_tier, unsummarized_obs)` - Generate coherent mental model narrative
 
 ### `embeddings.py`
