@@ -173,12 +173,13 @@ def embed(parallel):
 @click.argument('query')
 @click.option('--limit', '-n', default=20, help='Number of results to retrieve')
 @click.option('--raw', is_flag=True, help='Show raw results without LLM synthesis')
-def search(query, limit, raw):
+@click.option('--time-weight', '-t', default=0.3, help='Time decay weight (0=pure semantic, 1=heavy recency bias)')
+def search(query, limit, raw, time_weight):
     session = get_session()
     conn = sqlite3.connect('memory.db')
     enable_vec(conn)
     
-    results = search_memory(conn, query, limit)
+    results = search_memory(conn, query, limit, time_weight=time_weight)
     
     if not results:
         click.echo('No results. Run "embed" first to create embeddings.')

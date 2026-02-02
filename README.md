@@ -328,17 +328,20 @@ python cli.py embed --parallel 20  # More parallel workers
 Embeddings are batched by token count (max 250k tokens per request) and item count (max 2048 items per request) and processed in parallel.
 
 ### `search`
-Semantic search across memory.
+Semantic search across memory with optional temporal weighting.
 
 ```bash
 python cli.py search "What programming languages does the user prefer?"
 python cli.py search "user's family" --limit 10 --raw
+python cli.py search "recent projects" --time-weight 0.5  # favor recent results
+python cli.py search "historical facts" --time-weight 0   # pure semantic
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--limit` | Number of results (default: 20) |
 | `--raw` | Show raw results without LLM synthesis |
+| `--time-weight` | Time decay weight from 0-1 (default: 0.3). 0 = pure semantic similarity, 1 = heavy recency bias. Uses exponential decay with 30-day half-life. |
 
 ## Generate
 
@@ -430,6 +433,7 @@ Vector embedding utilities.
 - `EMBEDDING_DIM` - Dimension count (1536)
 - `MAX_TOKENS_PER_REQUEST` - Token limit per API call (250k)
 - `MAX_ITEMS_PER_REQUEST` - Item limit per API call (2048)
+- `TIME_DECAY_HALF_LIFE_DAYS` - Half-life for temporal decay (30 days)
 - `estimate_tokens(text)` - Estimate token count
 - `batch_by_tokens(texts, max_tokens, max_items)` - Split texts into batches respecting both limits
 - `get_embedding(text)` - Generate single embedding
@@ -440,7 +444,8 @@ Vector embedding utilities.
 - `init_memory_vec(conn)` - Create memory_vec virtual table
 - `get_existing_embeddings(conn)` - Get already embedded items
 - `store_embeddings(conn, items, embeddings)` - Store embeddings in database
-- `search_memory(conn, query_text, limit)` - Search memory by text query
+- `compute_time_penalty(timestamp, half_life_days)` - Exponential decay penalty based on age
+- `search_memory(conn, query_text, limit, time_weight)` - Search memory with temporal reranking
 
 ### `loaders.py`
 Message loading from various formats.
@@ -482,7 +487,8 @@ Tier N summaries (groups of 10) → summarize_summaries → Tier N+1 summaries
 
 ### Search Flow
 ```
-Query → get_embedding → memory_vec MATCH → ranked results
+Query → get_embedding → memory_vec MATCH → candidates (3x limit)
+     → fetch timestamps → compute_time_penalty → rerank by combined score
      → fetch Observation/Summary objects → LLM synthesis → answer
 ```
 

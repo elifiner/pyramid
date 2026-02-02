@@ -1,4 +1,6 @@
 import struct
+import math
+from datetime import datetime, UTC
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sqlite_vec
 from openai import OpenAI
@@ -9,6 +11,7 @@ load_dotenv()
 client = OpenAI()
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
+TIME_DECAY_HALF_LIFE_DAYS = 30
 
 
 MAX_TOKENS_PER_REQUEST = 250000
@@ -142,13 +145,62 @@ def store_embeddings(conn, items, embeddings):
     conn.commit()
 
 
-def search_memory(conn, query_text, limit=20):
+def compute_time_penalty(timestamp, half_life_days=TIME_DECAY_HALF_LIFE_DAYS):
+    if timestamp is None:
+        return 0.5
+    now = datetime.now(UTC)
+    if isinstance(timestamp, str):
+        timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    age_days = (now - timestamp).total_seconds() / 86400
+    decay_rate = math.log(2) / half_life_days
+    return 1 - math.exp(-age_days * decay_rate)
+
+
+def search_memory(conn, query_text, limit=20, time_weight=0.3):
     query_embedding = get_embedding(query_text)
-    results = conn.execute("""
+    fetch_limit = limit * 3 if time_weight > 0 else limit
+    
+    candidates = conn.execute("""
         SELECT source_type, source_id, distance
         FROM memory_vec
         WHERE embedding MATCH ?
         ORDER BY distance
         LIMIT ?
-    """, [serialize_embedding(query_embedding), limit]).fetchall()
-    return results
+    """, [serialize_embedding(query_embedding), fetch_limit]).fetchall()
+    
+    if time_weight == 0:
+        return candidates
+    
+    obs_ids = [r[1] for r in candidates if r[0] == 'observation']
+    sum_ids = [r[1] for r in candidates if r[0] == 'summary']
+    
+    timestamps = {}
+    if obs_ids:
+        placeholders = ','.join('?' * len(obs_ids))
+        rows = conn.execute(
+            f"SELECT id, timestamp FROM observations WHERE id IN ({placeholders})",
+            obs_ids
+        ).fetchall()
+        for id, ts in rows:
+            timestamps[('observation', id)] = ts
+    
+    if sum_ids:
+        placeholders = ','.join('?' * len(sum_ids))
+        rows = conn.execute(
+            f"SELECT id, end_timestamp FROM summaries WHERE id IN ({placeholders})",
+            sum_ids
+        ).fetchall()
+        for id, ts in rows:
+            timestamps[('summary', id)] = ts
+    
+    scored = []
+    for source_type, source_id, distance in candidates:
+        ts = timestamps.get((source_type, source_id))
+        time_penalty = compute_time_penalty(ts)
+        final_score = distance * (1 - time_weight) + time_penalty * time_weight
+        scored.append((source_type, source_id, distance, final_score))
+    
+    scored.sort(key=lambda x: x[3])
+    return [(r[0], r[1], r[2]) for r in scored[:limit]]

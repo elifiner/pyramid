@@ -1,7 +1,9 @@
 import pytest
+from datetime import datetime, timedelta, UTC
 from embeddings import (
     serialize_embedding, deserialize_embedding, estimate_tokens,
-    batch_by_tokens, EMBEDDING_DIM, MAX_TOKENS_PER_REQUEST
+    batch_by_tokens, compute_time_penalty, EMBEDDING_DIM, MAX_TOKENS_PER_REQUEST,
+    TIME_DECAY_HALF_LIFE_DAYS
 )
 
 
@@ -58,3 +60,26 @@ def test_batch_by_tokens_splits_large():
 
 def test_batch_by_tokens_empty():
     assert batch_by_tokens([]) == []
+
+
+def test_compute_time_penalty_now():
+    now = datetime.now(UTC)
+    penalty = compute_time_penalty(now)
+    assert penalty < 0.01
+
+
+def test_compute_time_penalty_half_life():
+    half_life_ago = datetime.now(UTC) - timedelta(days=TIME_DECAY_HALF_LIFE_DAYS)
+    penalty = compute_time_penalty(half_life_ago)
+    assert 0.49 < penalty < 0.51
+
+
+def test_compute_time_penalty_old():
+    old = datetime.now(UTC) - timedelta(days=365)
+    penalty = compute_time_penalty(old)
+    assert penalty > 0.99
+
+
+def test_compute_time_penalty_none():
+    penalty = compute_time_penalty(None)
+    assert penalty == 0.5
