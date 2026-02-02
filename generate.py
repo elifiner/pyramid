@@ -173,13 +173,16 @@ def render_model_file(data, content):
     return '\n'.join(lines)
 
 
-def export_models(workspace, db_path='pyramid.db', debug=False, do_synthesize=True, on_progress=None, max_workers=10, ref_date=None):
+def export_models(workspace, db_path='pyramid.db', debug=False, do_synthesize=True, on_progress=None, max_workers=10, ref_date=None, model_ids=None):
     workspace = Path(workspace)
     session = get_session(db_path)
     
     update_model_descriptions(session, on_progress, max_workers)
     
-    models = session.query(Model).all()
+    if model_ids is not None:
+        models = session.query(Model).filter(Model.id.in_(model_ids)).all()
+    else:
+        models = session.query(Model).all()
     
     from datetime import datetime, UTC
     global_ref_date = ref_date or datetime.now(UTC)
@@ -199,9 +202,6 @@ def export_models(workspace, db_path='pyramid.db', debug=False, do_synthesize=Tr
             'ref_date': global_ref_date,
         })
     
-    session.close()
-    
-    other_models = []
     results = {}
     
     if do_synthesize and not debug:
@@ -222,14 +222,28 @@ def export_models(workspace, db_path='pyramid.db', debug=False, do_synthesize=Tr
     assistant_content = results.get('assistant', '')
     user_content = results.get('user', '')
     
+    regenerated = []
+    
     for data in model_data:
         if data['name'] in CORE_MODELS:
             continue
         
         content = render_model_file(data, results[data['name']])
         path = workspace / f'models/{data["name"]}.md'
-        other_models.append((data, f'models/{data["name"]}.md'))
         write_file(path, content)
+        regenerated.append(f'models/{data["name"]}.md')
     
-    memory_content = render_memory(assistant_content, user_content, other_models)
-    write_file(workspace / 'MEMORY.md', memory_content)
+    write_memory = model_ids is None or any(data['name'] in CORE_MODELS for data in model_data)
+    if write_memory:
+        all_other_models = session.query(Model).filter(~Model.name.in_(CORE_MODELS)).all()
+        other_models_index = [
+            ({'description': m.description}, f'models/{m.name}.md')
+            for m in all_other_models
+        ]
+        memory_content = render_memory(assistant_content, user_content, other_models_index)
+        write_file(workspace / 'MEMORY.md', memory_content)
+        regenerated.append('MEMORY.md')
+    
+    session.close()
+    
+    return regenerated

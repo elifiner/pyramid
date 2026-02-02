@@ -40,6 +40,15 @@ class Summary(Base):
     model = relationship('Model', back_populates='summaries')
 
 
+class ImportedSession(Base):
+    __tablename__ = 'imported_sessions'
+    
+    id = Column(Integer, primary_key=True)
+    file_path = Column(String, unique=True, nullable=False)
+    last_size = Column(Integer, nullable=False)
+    last_mtime = Column(DateTime, nullable=False)
+
+
 def get_engine(db_path='pyramid.db'):
     return create_engine(f'sqlite:///{db_path}')
 

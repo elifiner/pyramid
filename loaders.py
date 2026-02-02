@@ -92,6 +92,37 @@ def load_claude_messages(source, limit=None):
     return messages, None
 
 
+def parse_openclaw_line(line):
+    record = json.loads(line)
+    if record.get('type') != 'message':
+        return None
+    
+    msg = record.get('message', {})
+    role = msg.get('role', '')
+    if role not in ('user', 'assistant'):
+        return None
+    
+    content_parts = []
+    for content in msg.get('content', []):
+        if content.get('type') == 'text' and content.get('text'):
+            content_parts.append(content['text'])
+    
+    if not content_parts:
+        return None
+    
+    ts_ms = msg.get('timestamp')
+    if ts_ms:
+        timestamp = datetime.fromtimestamp(ts_ms / 1000).isoformat()
+    else:
+        timestamp = record.get('timestamp', '')
+    
+    return {
+        'role': role,
+        'content': '\n'.join(content_parts),
+        'timestamp': timestamp
+    }
+
+
 def load_openclaw_messages(source=None, limit=None):
     source_path = Path(source) if source else DEFAULT_OPENCLAW_PATH
     
@@ -104,36 +135,75 @@ def load_openclaw_messages(source=None, limit=None):
     for session_file in session_files:
         with open(session_file) as f:
             for line in f:
-                record = json.loads(line)
-                if record.get('type') != 'message':
-                    continue
-                
-                msg = record.get('message', {})
-                role = msg.get('role', '')
-                if role not in ('user', 'assistant'):
-                    continue
-                
-                content_parts = []
-                for content in msg.get('content', []):
-                    if content.get('type') == 'text' and content.get('text'):
-                        content_parts.append(content['text'])
-                
-                if not content_parts:
-                    continue
-                
-                ts_ms = msg.get('timestamp')
-                if ts_ms:
-                    timestamp = datetime.fromtimestamp(ts_ms / 1000).isoformat()
-                else:
-                    timestamp = record.get('timestamp', '')
-                
-                messages.append({
-                    'role': role,
-                    'content': '\n'.join(content_parts),
-                    'timestamp': timestamp
-                })
+                msg = parse_openclaw_line(line)
+                if msg:
+                    messages.append(msg)
     
     messages.sort(key=lambda m: m.get('timestamp', ''))
     if limit:
         messages = messages[:limit]
     return messages, None
+
+
+def get_openclaw_file_stats(source=None):
+    source_path = Path(source) if source else DEFAULT_OPENCLAW_PATH
+    
+    if source_path.is_file():
+        session_files = [source_path]
+    else:
+        session_files = sorted(source_path.glob('*.jsonl'))
+    
+    stats = {}
+    for session_file in session_files:
+        file_path = str(session_file)
+        stat = os.stat(session_file)
+        stats[file_path] = (stat.st_size, datetime.fromtimestamp(stat.st_mtime))
+    
+    return stats
+
+
+def load_openclaw_incremental(source=None, session_tracking=None):
+    source_path = Path(source) if source else DEFAULT_OPENCLAW_PATH
+    
+    if source_path.is_file():
+        session_files = [source_path]
+    else:
+        session_files = sorted(source_path.glob('*.jsonl'))
+    
+    if session_tracking is None:
+        session_tracking = {}
+    
+    messages = []
+    updated_tracking = {}
+    changed_files = []
+    
+    for session_file in session_files:
+        file_path = str(session_file)
+        stat = os.stat(session_file)
+        current_size = stat.st_size
+        current_mtime = datetime.fromtimestamp(stat.st_mtime)
+        
+        prev = session_tracking.get(file_path)
+        if prev:
+            prev_size, prev_mtime = prev
+            if current_size == prev_size and current_mtime == prev_mtime:
+                updated_tracking[file_path] = (current_size, current_mtime)
+                continue
+            start_offset = prev_size
+        else:
+            start_offset = 0
+        
+        changed_files.append(file_path)
+        
+        with open(session_file, 'rb') as f:
+            if start_offset > 0:
+                f.seek(start_offset)
+            for line in f:
+                msg = parse_openclaw_line(line.decode('utf-8'))
+                if msg:
+                    messages.append(msg)
+        
+        updated_tracking[file_path] = (current_size, current_mtime)
+    
+    messages.sort(key=lambda m: m.get('timestamp', ''))
+    return messages, updated_tracking, changed_files

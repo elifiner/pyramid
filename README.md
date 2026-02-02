@@ -196,6 +196,16 @@ CREATE VIRTUAL TABLE memory_vec USING vec0(
 );
 ```
 
+**imported_sessions**
+```sql
+CREATE TABLE imported_sessions (
+    id INTEGER PRIMARY KEY,
+    file_path VARCHAR UNIQUE NOT NULL,
+    last_size INTEGER NOT NULL,
+    last_mtime DATETIME NOT NULL
+);
+```
+
 ## LLM Integration
 
 ### Configuration
@@ -316,6 +326,8 @@ JSONL files where each line is a JSON object. Messages have:
 }
 ```
 
+**Note:** OpenClaw imports automatically track session files for incremental sync. After import, you can use `heartbeat` to pick up new content without re-processing.
+
 ### `summarize`
 Run summarization to compress observations and summaries.
 
@@ -426,12 +438,72 @@ The synthesized content:
 - Preserves important historical context
 - Written in third-person narrative prose (first-person for `assistant`)
 
+### `heartbeat`
+Incremental sync from OpenClaw sessions. Detects new content, imports, summarizes, embeds, and regenerates workspace files for affected models.
+
+```bash
+python cli.py heartbeat /path/to/workspace
+python cli.py heartbeat /path/to/workspace --parallel 10
+python cli.py heartbeat /path/to/workspace --source /custom/sessions
+python cli.py heartbeat /path/to/workspace --no-generate
+python cli.py heartbeat /path/to/workspace --init  # bootstrap without importing
+```
+
+| Flag | Description |
+|------|-------------|
+| `--source` | Path to sessions directory (default: ~/.openclaw/agents/main/sessions) |
+| `--parallel` | Number of parallel workers (default: 10) |
+| `--no-generate` | Skip workspace file regeneration |
+| `--init` | Mark all current session files as processed without importing (for bootstrap) |
+
+**Bootstrapping:**
+
+If you've already imported conversations via another method (e.g., `import --glenn`), use `--init` to mark OpenClaw session files as processed:
+
+```bash
+# After importing from another source, mark openclaw sessions as baseline
+python cli.py heartbeat /path/to/workspace --init
+
+# Future heartbeats will only pick up new content
+python cli.py heartbeat /path/to/workspace
+```
+
+Note: `import --openclaw` automatically tracks files, so `--init` is only needed when bootstrapping from non-OpenClaw sources.
+
+**How it works:**
+
+1. Tracks processed session files in `imported_sessions` table (file path, size, mtime)
+2. On each run, stats session files to detect changes
+3. For changed files, reads only new bytes (seeks to last position)
+4. Extracts observations from new messages
+5. Runs tier 0 summarization (and higher tiers if thresholds met)
+6. Embeds new observations and summaries
+7. Regenerates workspace files only for affected models
+
+**Speed optimizations:**
+
+- Unchanged files are skipped entirely (fast stat check)
+- Only new bytes are read from changed files
+- Summarization, embedding, and synthesis are incremental
+- Only affected models trigger workspace regeneration
+
+**Example output:**
+```
+Heartbeat: 3 changed files, 47 new messages
+Extracted 12 observations
+Created 1 tier 0 summaries
+Embedded 13 items
+Regenerating 2 affected models...
+Regenerated: MEMORY.md, models/project-x.md
+Done
+```
+
 ## Module Reference
 
 ### `db.py`
 SQLAlchemy models and database initialization.
 
-- `Model`, `Observation`, `Summary` - ORM classes
+- `Model`, `Observation`, `Summary`, `ImportedSession` - ORM classes
 - `get_engine(db_path)` - Create SQLAlchemy engine
 - `get_session(db_path)` - Create session
 - `init_db(db_path)` - Initialize tables and base models
@@ -496,6 +568,8 @@ Message loading from various formats.
 - `load_glenn_messages(source, conversation, user, limit)` - Load from Glenn SQLite format
 - `load_claude_messages(source, limit)` - Load from Claude JSON export
 - `load_openclaw_messages(source, limit)` - Load from OpenClaw JSONL sessions
+- `get_openclaw_file_stats(source)` - Get current file sizes/mtimes for tracking
+- `load_openclaw_incremental(source, session_tracking)` - Load only new messages since last sync
 
 ### `generate.py`
 Markdown generation with synthesis.
@@ -507,7 +581,7 @@ Markdown generation with synthesis.
 - `synthesize_model_content(data)` - LLM synthesis for a model
 - `render_model_content(data, debug)` - Raw rendering without synthesis
 - `render_model_file(data, content)` - Wrap content in model file format
-- `export_models(workspace, db_path, debug, do_synthesize, on_progress)` - Main export function
+- `export_models(workspace, db_path, debug, do_synthesize, on_progress, model_ids)` - Main export function (model_ids filters to specific models)
 
 ### `cli.py`
 Command-line interface (thin wrapper over logic modules).
@@ -549,6 +623,15 @@ Query → get_embedding → memory_vec MATCH → candidates (3x limit)
 ```
 Models → update_model_descriptions → get_pyramid + get_unsummarized_observations
       → synthesize_model (parallel) → write_if_changed → markdown files
+```
+
+### Heartbeat Flow
+```
+Session files → stat check → changed files only
+             → seek to last_size → read new lines → parse messages
+             → extract_observations → run_tier0_summarization
+             → run_higher_tier_summarization → embed new items
+             → export_models (affected only) → update imported_sessions
 ```
 
 ## Configuration
