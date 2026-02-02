@@ -145,10 +145,10 @@ def embed(parallel):
     
     to_embed = []
     for obs in session.query(Observation).all():
-        if ('observation', obs.id) not in existing:
+        if ('observation', obs.id) not in existing and obs.text and obs.text.strip():
             to_embed.append(('observation', obs.id, obs.text))
     for s in session.query(Summary).all():
-        if ('summary', s.id) not in existing:
+        if ('summary', s.id) not in existing and s.text and s.text.strip():
             to_embed.append(('summary', s.id, s.text))
     
     if not to_embed:
@@ -157,7 +157,11 @@ def embed(parallel):
     
     click.echo(f'Embedding {len(to_embed)} items...')
     texts = [item[2] for item in to_embed]
-    embeddings = embed_many(texts, max_workers=parallel, on_progress=lambda done, total: click.echo(f'  {done}/{total}'))
+    
+    def progress(items_done, items_total, batches_done, batches_total):
+        click.echo(f'  {items_done}/{items_total} items ({batches_done}/{batches_total} batches)')
+    
+    embeddings = embed_many(texts, max_workers=parallel, on_progress=progress)
     
     store_embeddings(conn, to_embed, embeddings)
     conn.close()

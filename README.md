@@ -325,7 +325,7 @@ python cli.py embed --parallel 20  # More parallel workers
 |------|-------------|
 | `--parallel` | Number of parallel workers for batch processing (default: 10) |
 
-Embeddings are batched by token count (max 250k tokens per request) and processed in parallel.
+Embeddings are batched by token count (max 250k tokens per request) and item count (max 2048 items per request) and processed in parallel.
 
 ### `search`
 Semantic search across memory.
@@ -429,8 +429,9 @@ Vector embedding utilities.
 - `EMBEDDING_MODEL` - Model name
 - `EMBEDDING_DIM` - Dimension count (1536)
 - `MAX_TOKENS_PER_REQUEST` - Token limit per API call (250k)
+- `MAX_ITEMS_PER_REQUEST` - Item limit per API call (2048)
 - `estimate_tokens(text)` - Estimate token count
-- `batch_by_tokens(texts, max_tokens)` - Split texts into token-limited batches
+- `batch_by_tokens(texts, max_tokens, max_items)` - Split texts into batches respecting both limits
 - `get_embedding(text)` - Generate single embedding
 - `embed_many(texts, max_workers, on_progress)` - Batch embed with parallel processing
 - `serialize_embedding(embedding)` - Convert to bytes
@@ -512,6 +513,7 @@ STEP = 10
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 MAX_TOKENS_PER_REQUEST = 250000
+MAX_ITEMS_PER_REQUEST = 2048
 ```
 
 ## Testing

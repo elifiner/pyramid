@@ -12,6 +12,7 @@ EMBEDDING_DIM = 1536
 
 
 MAX_TOKENS_PER_REQUEST = 250000
+MAX_ITEMS_PER_REQUEST = 2048
 CHARS_PER_TOKEN = 4
 
 
@@ -35,14 +36,14 @@ def get_embeddings_batch(texts):
     return [item.embedding for item in response.data]
 
 
-def batch_by_tokens(texts, max_tokens=MAX_TOKENS_PER_REQUEST):
+def batch_by_tokens(texts, max_tokens=MAX_TOKENS_PER_REQUEST, max_items=MAX_ITEMS_PER_REQUEST):
     batches = []
     current_batch = []
     current_tokens = 0
     
     for text in texts:
         tokens = estimate_tokens(text)
-        if current_tokens + tokens > max_tokens and current_batch:
+        if (current_tokens + tokens > max_tokens or len(current_batch) >= max_items) and current_batch:
             batches.append(current_batch)
             current_batch = []
             current_tokens = 0
@@ -58,7 +59,8 @@ def batch_by_tokens(texts, max_tokens=MAX_TOKENS_PER_REQUEST):
 def embed_many(texts, max_workers=10, on_progress=None):
     batches = batch_by_tokens(texts)
     results = [None] * len(batches)
-    completed = 0
+    items_done = 0
+    batches_done = 0
     
     def process_batch(batch_idx):
         return batch_idx, get_embeddings_batch(batches[batch_idx])
@@ -68,9 +70,10 @@ def embed_many(texts, max_workers=10, on_progress=None):
         for future in as_completed(futures):
             batch_idx, embeddings = future.result()
             results[batch_idx] = embeddings
-            completed += len(embeddings)
+            items_done += len(embeddings)
+            batches_done += 1
             if on_progress:
-                on_progress(completed, len(texts))
+                on_progress(items_done, len(texts), batches_done, len(batches))
     
     return [emb for batch in results for emb in batch]
 
