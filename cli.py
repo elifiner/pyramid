@@ -5,7 +5,7 @@ from db import init_db, get_session, Observation, Model, Summary
 from llm import extract_observations, client, MODEL
 from summarize import run_tier0_summarization, run_higher_tier_summarization, run_all_summarization
 from embeddings import embed_many, enable_vec, init_memory_vec, get_existing_embeddings, store_embeddings, search_memory, enrich_for_embedding
-from loaders import load_glenn_messages, load_claude_messages, group_messages_by_week
+from loaders import load_glenn_messages, load_claude_messages, load_openclaw_messages, group_messages_by_week
 from generate import export_models
 
 
@@ -26,9 +26,10 @@ def observe(text):
 
 
 @cli.command('import', help='Import conversations and extract observations.')
-@click.option('--source', required=True, help='Path to source file')
+@click.option('--source', default=None, help='Path to source file (optional for openclaw)')
 @click.option('--glenn', 'format', flag_value='glenn', help='Glenn SQLite format')
 @click.option('--claude', 'format', flag_value='claude', help='Claude JSON format')
+@click.option('--openclaw', 'format', flag_value='openclaw', help='OpenClaw JSONL sessions')
 @click.option('--limit', '-n', default=None, type=int, help='Limit number of messages to process')
 @click.option('--conversation', '-c', default=None, type=int, help='Process specific conversation ID (glenn only)')
 @click.option('--user', '-u', default=None, type=str, help='Filter by username (glenn only)')
@@ -37,7 +38,11 @@ def observe(text):
 @click.option('--clean', is_flag=True, help='Delete all existing data before import')
 def import_cmd(source, format, limit, conversation, user, parallel, no_summarize, clean):
     if not format:
-        click.echo('Error: Must specify --glenn or --claude format')
+        click.echo('Error: Must specify --glenn, --claude, or --openclaw format')
+        return
+    
+    if format != 'openclaw' and not source:
+        click.echo('Error: --source is required for glenn and claude formats')
         return
     
     if clean:
@@ -53,10 +58,13 @@ def import_cmd(source, format, limit, conversation, user, parallel, no_summarize
         messages, info = load_glenn_messages(source, conversation, user, limit)
         if info:
             click.echo(info)
-    else:
+    elif format == 'claude':
         messages, _ = load_claude_messages(source, limit)
+    else:
+        messages, _ = load_openclaw_messages(source, limit)
     
-    click.echo(f'Loaded {len(messages)} messages from {source}')
+    source_desc = source or 'default openclaw sessions'
+    click.echo(f'Loaded {len(messages)} messages from {source_desc}')
     
     if not messages:
         click.echo('No messages to process.')

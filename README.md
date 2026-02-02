@@ -263,13 +263,19 @@ python cli.py import --glenn --source conversations.db \
 python cli.py import --claude --source conversations.json \
     --parallel 10 \
     --limit 1000
+
+# OpenClaw format (JSONL sessions)
+python cli.py import --openclaw  # uses default ~/.openclaw/agents/main/sessions
+python cli.py import --openclaw --source /path/to/sessions \
+    --limit 1000
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--glenn` | Glenn SQLite database format |
 | `--claude` | Claude JSON export format |
-| `--source` | Path to source file |
+| `--openclaw` | OpenClaw JSONL session format |
+| `--source` | Path to source file/directory (optional for openclaw, defaults to ~/.openclaw/agents/main/sessions) |
 | `--parallel` | Number of parallel workers (default: 10) |
 | `--conversation` | Process specific conversation ID only (glenn only) |
 | `--user` | Filter by username (glenn only) |
@@ -294,6 +300,20 @@ timestamp TEXT   -- ISO timestamp
     "created_at": "2025-01-01T00:00:00Z"
   }]
 }]
+```
+
+**OpenClaw format schema:**
+JSONL files where each line is a JSON object. Messages have:
+```json
+{
+  "type": "message",
+  "timestamp": "2025-01-01T00:00:00Z",
+  "message": {
+    "role": "user",
+    "content": [{"type": "text", "text": "..."}],
+    "timestamp": 1704067200000
+  }
+}
 ```
 
 ### `summarize`
@@ -454,10 +474,12 @@ Vector embedding utilities.
 ### `loaders.py`
 Message loading from various formats.
 
+- `DEFAULT_OPENCLAW_PATH` - Default path to OpenClaw sessions (~/.openclaw/agents/main/sessions)
 - `get_week_key(timestamp_str)` - Extract ISO week key from timestamp
 - `group_messages_by_week(messages)` - Group messages by week
 - `load_glenn_messages(source, conversation, user, limit)` - Load from Glenn SQLite format
 - `load_claude_messages(source, limit)` - Load from Claude JSON export
+- `load_openclaw_messages(source, limit)` - Load from OpenClaw JSONL sessions
 
 ### `generate.py`
 Markdown generation with synthesis.

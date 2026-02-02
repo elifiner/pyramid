@@ -1,6 +1,10 @@
 import json
+import os
 from datetime import datetime
+from pathlib import Path
 from sqlalchemy import create_engine, text
+
+DEFAULT_OPENCLAW_PATH = Path.home() / '.openclaw' / 'agents' / 'main' / 'sessions'
 
 
 def get_week_key(timestamp_str):
@@ -76,6 +80,53 @@ def load_claude_messages(source, limit=None):
                     content_parts.append(content['text'])
             
             if content_parts:
+                messages.append({
+                    'role': role,
+                    'content': '\n'.join(content_parts),
+                    'timestamp': timestamp
+                })
+    
+    messages.sort(key=lambda m: m.get('timestamp', ''))
+    if limit:
+        messages = messages[:limit]
+    return messages, None
+
+
+def load_openclaw_messages(source=None, limit=None):
+    source_path = Path(source) if source else DEFAULT_OPENCLAW_PATH
+    
+    if source_path.is_file():
+        session_files = [source_path]
+    else:
+        session_files = sorted(source_path.glob('*.jsonl'))
+    
+    messages = []
+    for session_file in session_files:
+        with open(session_file) as f:
+            for line in f:
+                record = json.loads(line)
+                if record.get('type') != 'message':
+                    continue
+                
+                msg = record.get('message', {})
+                role = msg.get('role', '')
+                if role not in ('user', 'assistant'):
+                    continue
+                
+                content_parts = []
+                for content in msg.get('content', []):
+                    if content.get('type') == 'text' and content.get('text'):
+                        content_parts.append(content['text'])
+                
+                if not content_parts:
+                    continue
+                
+                ts_ms = msg.get('timestamp')
+                if ts_ms:
+                    timestamp = datetime.fromtimestamp(ts_ms / 1000).isoformat()
+                else:
+                    timestamp = record.get('timestamp', '')
+                
                 messages.append({
                     'role': role,
                     'content': '\n'.join(content_parts),

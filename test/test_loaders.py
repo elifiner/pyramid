@@ -1,7 +1,8 @@
 import pytest
 import json
 import tempfile
-from loaders import get_week_key, group_messages_by_week, load_claude_messages
+import os
+from loaders import get_week_key, group_messages_by_week, load_claude_messages, load_openclaw_messages
 
 
 def test_get_week_key_basic():
@@ -120,3 +121,119 @@ def test_load_claude_messages_multipart_content():
         
         messages, _ = load_claude_messages(f.name)
         assert messages[0]['content'] == 'Part 1\nPart 2'
+
+
+def test_load_openclaw_messages():
+    records = [
+        {'type': 'session', 'id': 'test-session', 'timestamp': '2025-01-15T10:00:00Z'},
+        {
+            'type': 'message',
+            'timestamp': '2025-01-15T10:00:00Z',
+            'message': {
+                'role': 'user',
+                'content': [{'type': 'text', 'text': 'Hello'}],
+                'timestamp': 1736935200000
+            }
+        },
+        {
+            'type': 'message',
+            'timestamp': '2025-01-15T10:01:00Z',
+            'message': {
+                'role': 'assistant',
+                'content': [
+                    {'type': 'thinking', 'thinking': 'Should not be included'},
+                    {'type': 'text', 'text': 'Hi there'}
+                ],
+                'timestamp': 1736935260000
+            }
+        }
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        for record in records:
+            f.write(json.dumps(record) + '\n')
+        f.flush()
+        
+        messages, info = load_openclaw_messages(f.name)
+        
+        assert len(messages) == 2
+        assert messages[0]['role'] == 'user'
+        assert messages[0]['content'] == 'Hello'
+        assert messages[1]['role'] == 'assistant'
+        assert messages[1]['content'] == 'Hi there'
+        assert info is None
+
+
+def test_load_openclaw_messages_skips_tool_results():
+    records = [
+        {
+            'type': 'message',
+            'message': {
+                'role': 'user',
+                'content': [{'type': 'text', 'text': 'Hello'}],
+                'timestamp': 1736935200000
+            }
+        },
+        {
+            'type': 'message',
+            'message': {
+                'role': 'toolResult',
+                'content': [{'type': 'text', 'text': 'Tool output'}],
+                'timestamp': 1736935230000
+            }
+        },
+        {
+            'type': 'message',
+            'message': {
+                'role': 'assistant',
+                'content': [{'type': 'text', 'text': 'Response'}],
+                'timestamp': 1736935260000
+            }
+        }
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        for record in records:
+            f.write(json.dumps(record) + '\n')
+        f.flush()
+        
+        messages, _ = load_openclaw_messages(f.name)
+        
+        assert len(messages) == 2
+        assert all(m['role'] in ('user', 'assistant') for m in messages)
+
+
+def test_load_openclaw_messages_directory():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        records1 = [
+            {'type': 'message', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': 'First'}], 'timestamp': 1736935200000}}
+        ]
+        records2 = [
+            {'type': 'message', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': 'Second'}], 'timestamp': 1736935260000}}
+        ]
+        
+        with open(os.path.join(tmpdir, 'session1.jsonl'), 'w') as f:
+            for r in records1:
+                f.write(json.dumps(r) + '\n')
+        with open(os.path.join(tmpdir, 'session2.jsonl'), 'w') as f:
+            for r in records2:
+                f.write(json.dumps(r) + '\n')
+        
+        messages, _ = load_openclaw_messages(tmpdir)
+        
+        assert len(messages) == 2
+
+
+def test_load_openclaw_messages_with_limit():
+    records = [
+        {'type': 'message', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': f'Msg {i}'}], 'timestamp': 1736935200000 + i * 60000}}
+        for i in range(5)
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        for record in records:
+            f.write(json.dumps(record) + '\n')
+        f.flush()
+        
+        messages, _ = load_openclaw_messages(f.name, limit=2)
+        assert len(messages) == 2
