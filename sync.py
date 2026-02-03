@@ -132,13 +132,10 @@ def sync(workspace, db='pyramid.db', source=None, on_progress=None, max_workers=
     
     session.close()
     
-    if on_progress:
-        on_progress("Running summarization...")
     tier0 = run_tier0_summarization(str(db_path), on_progress, max_workers)
     higher = run_higher_tier_summarization(str(db_path), on_progress, max_workers)
-    if tier0 or higher:
-        if on_progress:
-            on_progress(f"Created {tier0} tier-0 + {higher} higher-tier summaries")
+    if (tier0 or higher) and on_progress:
+        on_progress(f"Created {tier0} tier-0 + {higher} higher-tier summaries")
     
     dirty_processed = process_all_dirty(str(db_path), on_progress, max_workers)
     if dirty_processed and on_progress:
@@ -146,15 +143,16 @@ def sync(workspace, db='pyramid.db', source=None, on_progress=None, max_workers=
     
     embedded = embed_new_items(str(db_path), on_progress, max_workers)
     
-    if on_progress:
-        on_progress("Synthesizing models...")
     synthesized = synthesize_dirty_models(str(db_path), on_progress, max_workers)
     
-    if on_progress:
-        on_progress("Writing files...")
     written = write_model_files(str(db_path), workspace, on_progress)
     
     if on_progress:
-        on_progress(f"Sync complete. Files written: {', '.join(written)}")
+        if written:
+            on_progress(f"Sync complete. Updated: {', '.join(written)}")
+        elif tier0 or higher or dirty_processed or synthesized:
+            on_progress("Sync complete.")
+        else:
+            on_progress("Nothing to update.")
     
     return written
