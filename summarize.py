@@ -1,7 +1,8 @@
 import json
 from datetime import datetime, UTC
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy import func
-from db import get_session, Observation, Summary, Model, BASE_MODELS
+from db import get_session, Observation, Summary, SummarySource, Model, BASE_MODELS
 from llm import client, MODEL, MAX_TOKENS, CHARS_PER_TOKEN, estimate_tokens
 
 STEP = 10
@@ -96,18 +97,55 @@ Observations to assign:
                 
                 model = session.query(Model).filter_by(name=model_name).first()
                 if not model:
-                    model = Model(name=model_name, is_base=False)
+                    model = Model(name=model_name, is_base=False, content_dirty=True)
                     session.add(model)
                     session.flush()
                 
                 obs = session.query(Observation).get(obs_id)
                 if obs:
                     obs.model_id = model.id
+                    model.content_dirty = True
         
         session.commit()
         
         if on_progress:
             on_progress(f"  Assigned batch {i//STEP + 1}/{(len(observations) + STEP - 1)//STEP}")
+
+
+def mark_model_dirty(session, model_id):
+    model = session.query(Model).get(model_id)
+    if model:
+        model.content_dirty = True
+
+
+def mark_overlapping_summaries_dirty(session, model_id, timestamp):
+    summaries = session.query(Summary).filter(
+        Summary.model_id == model_id,
+        Summary.tier == 0,
+        Summary.start_timestamp <= timestamp,
+        Summary.end_timestamp >= timestamp
+    ).all()
+    for s in summaries:
+        s.is_dirty = True
+    return len(summaries)
+
+
+def record_summary_sources(session, summary, source_type, source_ids):
+    for source_id in source_ids:
+        session.add(SummarySource(
+            summary_id=summary.id,
+            source_type=source_type,
+            source_id=source_id
+        ))
+
+
+def propagate_dirty_upward(session, summary):
+    parent_summaries = session.query(Summary).join(SummarySource).filter(
+        SummarySource.source_type == 'summary',
+        SummarySource.source_id == summary.id
+    ).all()
+    for parent in parent_summaries:
+        parent.is_dirty = True
 
 
 def get_observations_by_model(session):
@@ -210,10 +248,63 @@ Combine these summaries into one higher-level narrative, preserving key facts an
     return response.choices[0].message.content
 
 
-def run_tier0_summarization(on_progress=None, max_workers=10, max_obs=None, start_id=None):
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+def process_dirty_tier0(db_path, on_progress=None, max_workers=10):
+    session = get_session(db_path)
     
-    session = get_session()
+    dirty_summaries = session.query(Summary).filter(
+        Summary.tier == 0,
+        Summary.is_dirty == True
+    ).all()
+    
+    if not dirty_summaries:
+        session.close()
+        return 0
+    
+    if on_progress:
+        on_progress(f"Regenerating {len(dirty_summaries)} dirty tier-0 summaries...")
+    
+    def process_one(summary_id):
+        s = get_session(db_path)
+        summary = s.query(Summary).get(summary_id)
+        model = summary.model
+        
+        observations = s.query(Observation).filter(
+            Observation.model_id == summary.model_id,
+            Observation.timestamp >= summary.start_timestamp,
+            Observation.timestamp <= summary.end_timestamp
+        ).order_by(Observation.timestamp).all()
+        
+        new_text = summarize_observations(observations, model.name, model.description or '')
+        obs_ids = [o.id for o in observations]
+        s.close()
+        return summary_id, new_text, obs_ids
+    
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_one, s.id): s for s in dirty_summaries}
+        for i, future in enumerate(as_completed(futures), 1):
+            results.append(future.result())
+            if on_progress:
+                on_progress(f"  [{i}/{len(dirty_summaries)}] regenerated")
+    
+    for summary_id, new_text, obs_ids in results:
+        summary = session.query(Summary).get(summary_id)
+        summary.text = new_text
+        summary.is_dirty = False
+        
+        session.query(SummarySource).filter_by(summary_id=summary_id).delete()
+        record_summary_sources(session, summary, 'observation', obs_ids)
+        
+        propagate_dirty_upward(session, summary)
+        mark_model_dirty(session, summary.model_id)
+    
+    session.commit()
+    session.close()
+    return len(results)
+
+
+def run_tier0_summarization(db_path, on_progress=None, max_workers=10, max_obs=None, start_id=None):
+    session = get_session(db_path)
     
     query = session.query(Observation).filter(Observation.model_id == None)
     if start_id:
@@ -258,7 +349,8 @@ def run_tier0_summarization(on_progress=None, max_workers=10, max_obs=None, star
     def process_task(task):
         model_id, model_name, model_desc, obs_chunk, start_ts, end_ts = task
         summary_text = summarize_observations(obs_chunk, model_name, model_desc or '')
-        return (model_id, summary_text, start_ts, end_ts)
+        obs_ids = [o.id for o in obs_chunk]
+        return (model_id, summary_text, start_ts, end_ts, obs_ids)
     
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -268,25 +360,28 @@ def run_tier0_summarization(on_progress=None, max_workers=10, max_obs=None, star
             if on_progress:
                 on_progress(f"  [{i}/{len(tasks)}] completed")
     
-    for model_id, summary_text, start_ts, end_ts in results:
+    for model_id, summary_text, start_ts, end_ts, obs_ids in results:
         summary = Summary(
             model_id=model_id,
             tier=0,
             text=summary_text,
             start_timestamp=start_ts,
-            end_timestamp=end_ts
+            end_timestamp=end_ts,
+            is_dirty=False
         )
         session.add(summary)
+        session.flush()
+        
+        record_summary_sources(session, summary, 'observation', obs_ids)
+        mark_model_dirty(session, model_id)
     
     session.commit()
     session.close()
     return len(results)
 
 
-def run_higher_tier_summarization(on_progress=None, max_workers=10, max_tier=None):
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    session = get_session()
+def run_higher_tier_summarization(db_path, on_progress=None, max_workers=10, max_tier=None):
+    session = get_session(db_path)
     models = session.query(Model).all()
     
     total_created = 0
@@ -344,7 +439,8 @@ def run_higher_tier_summarization(on_progress=None, max_workers=10, max_tier=Non
         def process_task(task):
             model_id, model_name, model_desc, new_tier, start_ts, end_ts, chunk = task
             summary_text = summarize_summaries(chunk, model_name, model_desc or '')
-            return (model_id, new_tier, start_ts, end_ts, summary_text)
+            child_ids = [s.id for s in chunk]
+            return (model_id, new_tier, start_ts, end_ts, summary_text, child_ids)
         
         results = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -354,15 +450,20 @@ def run_higher_tier_summarization(on_progress=None, max_workers=10, max_tier=Non
                 if on_progress:
                     on_progress(f"  [{i}/{len(tasks)}] completed")
         
-        for model_id, new_tier, start_ts, end_ts, summary_text in results:
+        for model_id, new_tier, start_ts, end_ts, summary_text, child_ids in results:
             summary = Summary(
                 model_id=model_id,
                 tier=new_tier,
                 text=summary_text,
                 start_timestamp=start_ts,
-                end_timestamp=end_ts
+                end_timestamp=end_ts,
+                is_dirty=False
             )
             session.add(summary)
+            session.flush()
+            
+            record_summary_sources(session, summary, 'summary', child_ids)
+            mark_model_dirty(session, model_id)
             total_created += 1
         
         session.commit()
@@ -372,7 +473,85 @@ def run_higher_tier_summarization(on_progress=None, max_workers=10, max_tier=Non
     return total_created
 
 
-def run_all_summarization(on_progress=None, max_workers=10, max_tier=None, max_obs=None, start_id=None):
-    tier0_count = run_tier0_summarization(on_progress, max_workers=max_workers, max_obs=max_obs, start_id=start_id)
-    higher_count = run_higher_tier_summarization(on_progress, max_workers=max_workers, max_tier=max_tier)
+def process_dirty_higher_tiers(db_path, on_progress=None, max_workers=10, max_tier=None):
+    session = get_session(db_path)
+    
+    tier = 1
+    total_processed = 0
+    
+    while True:
+        if max_tier is not None and tier > max_tier:
+            break
+        
+        dirty_summaries = session.query(Summary).filter(
+            Summary.tier == tier,
+            Summary.is_dirty == True
+        ).all()
+        
+        if not dirty_summaries:
+            tier += 1
+            more_tiers = session.query(Summary).filter(Summary.tier >= tier).first()
+            if not more_tiers:
+                break
+            continue
+        
+        if on_progress:
+            on_progress(f"Regenerating {len(dirty_summaries)} dirty tier-{tier} summaries...")
+        
+        def process_one(summary_id):
+            s = get_session(db_path)
+            summary = s.query(Summary).get(summary_id)
+            model = summary.model
+            
+            child_ids = [src.source_id for src in summary.sources if src.source_type == 'summary']
+            children = s.query(Summary).filter(Summary.id.in_(child_ids)).all() if child_ids else []
+            
+            if not children:
+                children = s.query(Summary).filter(
+                    Summary.model_id == summary.model_id,
+                    Summary.tier == tier - 1,
+                    Summary.start_timestamp >= summary.start_timestamp,
+                    Summary.end_timestamp <= summary.end_timestamp
+                ).order_by(Summary.start_timestamp).all()
+            
+            new_text = summarize_summaries(children, model.name, model.description or '')
+            s.close()
+            return summary_id, new_text, [c.id for c in children]
+        
+        results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_one, s.id): s for s in dirty_summaries}
+            for i, future in enumerate(as_completed(futures), 1):
+                results.append(future.result())
+                if on_progress:
+                    on_progress(f"  [{i}/{len(dirty_summaries)}] regenerated")
+        
+        for summary_id, new_text, child_ids in results:
+            summary = session.query(Summary).get(summary_id)
+            summary.text = new_text
+            summary.is_dirty = False
+            
+            session.query(SummarySource).filter_by(summary_id=summary_id).delete()
+            record_summary_sources(session, summary, 'summary', child_ids)
+            
+            propagate_dirty_upward(session, summary)
+            mark_model_dirty(session, summary.model_id)
+        
+        session.commit()
+        total_processed += len(results)
+        tier += 1
+    
+    session.close()
+    return total_processed
+
+
+def process_all_dirty(db_path, on_progress=None, max_workers=10, max_tier=None):
+    tier0_processed = process_dirty_tier0(db_path, on_progress, max_workers)
+    higher_processed = process_dirty_higher_tiers(db_path, on_progress, max_workers, max_tier)
+    return tier0_processed + higher_processed
+
+
+def run_all_summarization(db_path, on_progress=None, max_workers=10, max_tier=None, max_obs=None, start_id=None):
+    tier0_count = run_tier0_summarization(db_path, on_progress, max_workers=max_workers, max_obs=max_obs, start_id=start_id)
+    higher_count = run_higher_tier_summarization(db_path, on_progress, max_workers=max_workers, max_tier=max_tier)
     return tier0_count, higher_count

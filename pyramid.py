@@ -1,5 +1,6 @@
-from datetime import timedelta
-from db import Summary, Observation
+from datetime import timedelta, datetime, UTC
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from db import Summary, Observation, Model, get_session
 from llm import client, MODEL
 
 
@@ -150,3 +151,73 @@ Write a synthesized model of '{name}' with temporal sections:"""
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content.strip()
+
+
+def prepare_model_data(session, model, ref_date=None):
+    by_tier_raw = get_pyramid(session, model.id)
+    unsummarized = get_unsummarized_observations(session, model.id, by_tier_raw)
+    
+    by_tier = {
+        tier: [{'text': s.text, 'start_timestamp': s.start_timestamp, 'end_timestamp': s.end_timestamp} for s in sums]
+        for tier, sums in by_tier_raw.items()
+    }
+    unsummarized_with_ts = [(o.text, o.timestamp) for o in unsummarized]
+    
+    return {
+        'name': model.name,
+        'description': model.description,
+        'by_tier': by_tier,
+        'unsummarized': unsummarized_with_ts,
+        'ref_date': ref_date or datetime.now(UTC),
+    }
+
+
+def synthesize_one_model(data):
+    if not data['by_tier'] and not data['unsummarized']:
+        return None
+    return synthesize_model(
+        data['name'],
+        data['description'],
+        data['by_tier'],
+        data['unsummarized'],
+        data['ref_date']
+    )
+
+
+def synthesize_dirty_models(db_path, on_progress=None, max_workers=10, ref_date=None):
+    session = get_session(db_path)
+    
+    dirty_models = session.query(Model).filter(Model.content_dirty == True).all()
+    
+    if not dirty_models:
+        session.close()
+        return 0
+    
+    if on_progress:
+        on_progress(f"Synthesizing {len(dirty_models)} dirty models...")
+    
+    global_ref_date = ref_date or datetime.now(UTC)
+    
+    model_data_list = []
+    for model in dirty_models:
+        data = prepare_model_data(session, model, global_ref_date)
+        data['model_id'] = model.id
+        model_data_list.append(data)
+    
+    results = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(synthesize_one_model, data): data for data in model_data_list}
+        for i, future in enumerate(as_completed(futures), 1):
+            data = futures[future]
+            content = future.result()
+            results[data['model_id']] = content
+            if on_progress:
+                on_progress(f"  [{i}/{len(model_data_list)}] {data['name']}")
+    
+    for model in dirty_models:
+        model.synthesized_content = results.get(model.id)
+        model.content_dirty = False
+    
+    session.commit()
+    session.close()
+    return len(dirty_models)

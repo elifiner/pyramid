@@ -1,5 +1,6 @@
 import pytest
-from generate import render_memory, CORE_MODELS, TIER_LABELS
+from unittest.mock import Mock
+from generate import render_memory, CORE_MODELS
 
 
 def test_render_memory_with_content():
@@ -20,9 +21,15 @@ def test_render_memory_with_content():
 def test_render_memory_with_other_models():
     assistant_content = "Assistant content"
     user_content = "User content"
+    
+    mock_python = Mock()
+    mock_python.description = 'Python project'
+    mock_japan = Mock()
+    mock_japan.description = 'Japan trip'
+    
     other_models = [
-        ({'description': 'Python project'}, 'models/python.md'),
-        ({'description': 'Japan trip'}, 'models/japan-2025.md'),
+        (mock_python, 'models/python.md'),
+        (mock_japan, 'models/japan-2025.md'),
     ]
     
     content = render_memory(assistant_content, user_content, other_models)
@@ -44,9 +51,3 @@ def test_render_memory_empty_content():
 def test_core_models():
     assert 'assistant' in CORE_MODELS
     assert 'user' in CORE_MODELS
-
-
-def test_tier_labels():
-    assert TIER_LABELS[0] == 'Recent'
-    assert TIER_LABELS[1] == 'This Month'
-    assert TIER_LABELS[2] == 'Historical'

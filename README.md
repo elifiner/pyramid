@@ -1,6 +1,6 @@
 # Pyramid Memory
 
-## 🦞 Agent Quick Start
+## Agent Quick Start
 
 You are an AI agent. Here is exactly what to do:
 
@@ -11,74 +11,66 @@ pip install -r requirements.txt
 # 2. Set your API key
 export OPENAI_API_KEY=sk-...
 
-# 3. Initialize database (creates pyramid.db in current directory)
-python cli.py summarize  # Creates empty db with base models, exits cleanly if nothing to do
+# 3. Import your conversation history (pick ONE based on your source)
+python cli.py import -w ~/memory --openclaw                              # Default: ~/.openclaw/agents/main/sessions
+python cli.py import -w ~/memory --openclaw --source /path/to/sessions   # Custom OpenClaw path
+python cli.py import -w ~/memory --glenn --source conversations.db       # Glenn SQLite format
+python cli.py import -w ~/memory --claude --source conversations.json    # Claude JSON export
 
-# 4. Import your conversation history (pick ONE based on your source)
-python cli.py import --openclaw                              # Default: ~/.openclaw/agents/main/sessions
-python cli.py import --openclaw --source /path/to/sessions   # Custom OpenClaw path
-python cli.py import --glenn --source conversations.db       # Glenn SQLite format
-python cli.py import --claude --source conversations.json    # Claude JSON export
+# 4. Sync: summarize, embed, synthesize, and write files
+python cli.py sync -w ~/memory
 
-# 5. BACKUP existing MEMORY.md if it exists (generate will overwrite it!)
-cp /path/to/your/workspace/MEMORY.md /path/to/your/workspace/MEMORY.md.backup 2>/dev/null || true
-
-# 6. Generate workspace files
-python cli.py generate /path/to/your/workspace
-
-# 7. Review the generated files - read MEMORY.md and each file in models/
+# 5. Review the generated files - read MEMORY.md and each file in models/
 #    Check that the synthesized content makes sense and captures key facts
 #    The models/ directory contains topic-specific files discovered from conversations
-
-# 8. Set up heartbeat for ongoing sync (see Heartbeat Setup below)
 ```
 
-**Database location**: `pyramid.db` is created in the current working directory. Use `--db /path/to/pyramid.db` on any command to specify a different location.
-
-**Workspace**: The target directory for `generate` and `heartbeat`. It will create `MEMORY.md` and a `models/` subdirectory. The workspace can be empty or pre-existing. **Warning**: `MEMORY.md` is regenerated from scratch each time—back it up if you've made manual edits.
+**Workspace structure**: The `-w`/`--workspace` option specifies a directory that contains everything:
+```
+~/memory/
+  pyramid.db          # Database (filename configurable via --db)
+  MEMORY.md           # Generated memory file
+  SOUL.md             # Hand-crafted identity (not overwritten)
+  USER.md             # Hand-crafted user info (not overwritten)
+  models/
+    gavrie.md
+    project-x.md
+    ...
+```
 
 **After generation**: Read through `MEMORY.md` and all files in `models/`. These represent the system's understanding of you, the user, and discovered topics. Verify the facts are accurate and the temporal organization (recent vs. historical) makes sense.
 
-### Heartbeat Setup
+### Ongoing Sync
 
-The `heartbeat` command is your ongoing sync mechanism. It detects new conversations, extracts observations, updates summaries, and regenerates only the affected model files.
+The `sync` command is your main ongoing mechanism. It detects new conversations, extracts observations, updates summaries, embeds, synthesizes, and writes files.
 
 ```bash
-# Basic heartbeat (uses default OpenClaw session path)
-python cli.py heartbeat /path/to/your/workspace
+# Basic sync (processes any new observations, updates dirty models)
+python cli.py sync -w ~/memory
 
-# With custom session source
-python cli.py heartbeat /path/to/your/workspace --source /path/to/sessions
+# With incremental import from OpenClaw sessions
+python cli.py sync -w ~/memory --source ~/.openclaw/agents/main/sessions
 ```
 
-**When to run heartbeat**:
+**When to run sync**:
 - After each conversation ends
 - On a schedule (e.g., every few hours)
 - Before starting work that needs fresh memory context
 
-**If you imported from non-OpenClaw sources** (glenn, claude) and want heartbeat to track OpenClaw sessions going forward:
+**If starting fresh with no history**: Just run `observe` commands to add observations manually, then `sync`:
 ```bash
-# Mark current OpenClaw sessions as already processed (don't re-import)
-python cli.py heartbeat /path/to/workspace --init
-
-# Now future heartbeats will only pick up new content
-python cli.py heartbeat /path/to/workspace
-```
-
-**If starting fresh with no history**: Just run `observe` commands to add observations manually, then `summarize`, then `generate`:
-```bash
-python cli.py observe "User prefers dark mode"
-python cli.py observe "User's name is Alex"
-python cli.py summarize
-python cli.py embed
-python cli.py generate /path/to/workspace
+python cli.py observe -w ~/memory "User prefers dark mode"
+python cli.py observe -w ~/memory "User's name is Alex"
+python cli.py sync -w ~/memory
 ```
 
 ---
 
 ## TL;DR
 
-A pyramidal memory system for AI agents. Extracts observations from conversations, organizes them into mental models (assistant, user, and discovered topics), compresses them into tiered summaries, and synthesizes coherent narratives. Query via semantic search or export to markdown files for full context loading in 🦞 OpenClaw agents.
+A pyramidal memory system for AI agents. Extracts observations from conversations, organizes them into mental models (assistant, user, and discovered topics), compresses them into tiered summaries, and synthesizes coherent narratives. Query via semantic search or export to markdown files for full context loading in OpenClaw agents.
+
+**Key feature**: Lazy updates with dirty tracking. Only models and summaries that have changed inputs are regenerated.
 
 ---
 
@@ -90,12 +82,14 @@ Pyramid Memory implements a hierarchical memory system designed for AI agents to
 ┌─────────────────────────────────────────────────────────────┐
 │                    SYNTHESIS LAYER                          │
 │  LLM synthesizes pyramids into coherent mental models       │
+│  Results cached in DB (content_dirty tracking)              │
 ├─────────────────────────────────────────────────────────────┤
 │                    RETRIEVAL LAYER                          │
 │  Pyramid retrieval, semantic search, markdown export        │
 ├─────────────────────────────────────────────────────────────┤
 │                    COMPRESSION LAYER                        │
 │  Tier 0: 10 obs → Tier 1: 10 T0 → Tier 2: 10 T1 → ...      │
+│  Sources tracked, is_dirty propagation                      │
 ├─────────────────────────────────────────────────────────────┤
 │                    ORGANIZATION LAYER                       │
 │  Mental models: assistant, user, + discovered topics        │
@@ -145,6 +139,8 @@ Categories that organize observations and summaries. Each model represents a con
 - `name`: String, unique identifier (lowercase, hyphenated)
 - `description`: String, derived from highest-tier summary
 - `is_base`: Boolean, true for assistant/user
+- `synthesized_content`: Text, cached synthesis result
+- `content_dirty`: Boolean, true when synthesis needs regeneration
 
 **Model assignment behavior:**
 - Unassigned observations are processed before tier-0 summarization
@@ -169,10 +165,23 @@ Narrative prose summaries representing observations or lower-tier summaries. Use
 - `text`: Summary text in narrative prose
 - `start_timestamp`: DateTime, coverage start
 - `end_timestamp`: DateTime, coverage end
+- `is_dirty`: Boolean, true when summary needs regeneration
+
+**Summary sources:** The `summary_sources` table tracks which observations or summaries went into each summary, enabling dirty propagation when inputs change.
 
 **Summary format:**
 
 Summaries are written in clear, readable narrative prose. Importance is conveyed through word choice (e.g., "significantly", "notably", "critically") rather than markers or scores. Specific facts (names, dates, numbers, places) are preserved.
+
+### Dirty Tracking
+
+The system uses lazy updates with dirty propagation:
+
+1. **When observation created/assigned**: Model marked `content_dirty = True`
+2. **When summary regenerated**: Parent summaries marked `is_dirty = True`, model marked `content_dirty = True`
+3. **When model synthesized**: Result cached in `synthesized_content`, `content_dirty = False`
+
+This ensures only affected models and summaries are regenerated during sync.
 
 ### Pyramid Retrieval
 
@@ -192,7 +201,7 @@ This structure ensures:
 
 ### Model Synthesis
 
-When exporting to markdown for 🦞 OpenClaw agents, the pyramid and any unsummarized observations are synthesized into a coherent mental model organized by **temporal sections**.
+When exporting to markdown, the pyramid and any unsummarized observations are synthesized into a coherent mental model organized by **temporal sections**.
 
 **Deduplication**: Summaries from different tiers cover overlapping time periods by design (a tier-2 summary contains the same information as the tier-1 and tier-0 summaries it was created from). To avoid sending redundant content to the LLM, synthesis uses `get_non_overlapping_summaries()` which:
 1. Includes all summaries from the highest tier
@@ -207,14 +216,6 @@ When exporting to markdown for 🦞 OpenClaw agents, the pyramid and any unsumma
 | This Quarter | 30-90 days ago |
 | This Year | 90-365 days ago |
 | Earlier | More than a year ago |
-
-**Why temporal organization?** Three reasons:
-
-1. **Natural compression gradient**: Recent content (< ~10 days) is often unsummarized observations at full granularity, while older content has been progressively compressed (tier 0 = 10 obs, tier 1 = 100 obs, tier 2 = 1000 obs).
-
-2. **Mirrors human memory**: People remember yesterday in vivid detail and last year in broad strokes. The temporal sections make this gradient explicit.
-
-3. **Conversational expectations**: It's jarring when an agent forcefully integrates a specific fact from months ago into a response. Users expect recent context to dominate, with historical details surfacing only when relevant. The temporal structure guides agents toward natural memory retrieval—recent events are prominent, older context provides background without intruding.
 
 **Synthesis rules:**
 - Newer details override older ones (e.g., if location changes, use most recent)
@@ -234,7 +235,9 @@ CREATE TABLE models (
     id INTEGER PRIMARY KEY,
     name VARCHAR UNIQUE NOT NULL,
     description TEXT,
-    is_base BOOLEAN DEFAULT FALSE
+    is_base BOOLEAN DEFAULT FALSE,
+    synthesized_content TEXT,
+    content_dirty BOOLEAN DEFAULT TRUE
 );
 ```
 
@@ -256,7 +259,18 @@ CREATE TABLE summaries (
     tier INTEGER NOT NULL,
     text TEXT NOT NULL,
     start_timestamp DATETIME NOT NULL,
-    end_timestamp DATETIME NOT NULL
+    end_timestamp DATETIME NOT NULL,
+    is_dirty BOOLEAN DEFAULT FALSE
+);
+```
+
+**summary_sources**
+```sql
+CREATE TABLE summary_sources (
+    id INTEGER PRIMARY KEY,
+    summary_id INTEGER NOT NULL REFERENCES summaries(id),
+    source_type TEXT NOT NULL,  -- 'observation' or 'summary'
+    source_id INTEGER NOT NULL
 );
 ```
 
@@ -325,11 +339,15 @@ When processing exceeds MAX_TOKENS:
 
 ## CLI Reference
 
+All commands require `--workspace` / `-w` to specify the workspace directory.
+
+### Main Commands
+
 ### `observe`
 Add a single observation manually.
 
 ```bash
-python cli.py observe "User prefers vim keybindings"
+python cli.py observe -w ~/memory "User prefers vim keybindings"
 ```
 
 ### `import`
@@ -337,138 +355,115 @@ Extract observations from existing conversation data.
 
 ```bash
 # Glenn format (SQLite database)
-python cli.py import --glenn --source conversations.db \
+python cli.py import -w ~/memory --glenn --source conversations.db \
     --parallel 10 \
     --conversation 42 \
-    --limit 1000 \
-    --no-summarize
+    --limit 1000
 
 # Claude format (JSON export)
-python cli.py import --claude --source conversations.json \
+python cli.py import -w ~/memory --claude --source conversations.json \
     --parallel 10 \
     --limit 1000
 
-# 🦞 OpenClaw format (JSONL sessions)
-python cli.py import --openclaw  # uses default ~/.openclaw/agents/main/sessions
-python cli.py import --openclaw --source /path/to/sessions \
+# OpenClaw format (JSONL sessions)
+python cli.py import -w ~/memory --openclaw  # uses default ~/.openclaw/agents/main/sessions
+python cli.py import -w ~/memory --openclaw --source /path/to/sessions \
     --limit 1000
 ```
 
 | Flag | Description |
 |------|-------------|
+| `-w`, `--workspace` | Workspace directory (required) |
+| `--db` | Database filename (default: pyramid.db) |
 | `--glenn` | Glenn SQLite database format |
 | `--claude` | Claude JSON export format |
 | `--openclaw` | OpenClaw JSONL session format |
-| `--source` | Path to source file/directory (optional for openclaw, defaults to ~/.openclaw/agents/main/sessions) |
+| `--source` | Path to source file/directory (optional for openclaw) |
 | `--parallel` | Number of parallel workers (default: 10) |
 | `--conversation` | Process specific conversation ID only (glenn only) |
 | `--user` | Filter by username (glenn only) |
 | `--limit` | Limit number of messages |
-| `--no-summarize` | Skip automatic summarization during import |
 
-**Glenn format schema:**
-```sql
--- messages table must have:
-role TEXT,       -- 'user' or 'assistant'
-content TEXT,    -- message content
-timestamp TEXT   -- ISO timestamp
-```
-
-**Claude format schema:**
-```json
-[{
-  "uuid": "...",
-  "chat_messages": [{
-    "sender": "human",
-    "content": [{"type": "text", "text": "..."}],
-    "created_at": "2025-01-01T00:00:00Z"
-  }]
-}]
-```
-
-**OpenClaw format schema:**
-JSONL files where each line is a JSON object. Messages have:
-```json
-{
-  "type": "message",
-  "timestamp": "2025-01-01T00:00:00Z",
-  "message": {
-    "role": "user",
-    "content": [{"type": "text", "text": "..."}],
-    "timestamp": 1704067200000
-  }
-}
-```
-
-**Note:** OpenClaw imports automatically track session files for incremental sync. After import, you can use `heartbeat` to pick up new content without re-processing.
-
-### `summarize`
-Run summarization to compress observations and summaries.
+### `sync`
+Main command for ongoing sync. Processes dirty items and writes files.
 
 ```bash
-python cli.py summarize                # Run all tiers
-python cli.py summarize --clean        # Clear summaries and assignments first
-python cli.py summarize --max-obs 100  # Limit observations to process
-python cli.py summarize --max-tier 1   # Only build up to tier 1
+python cli.py sync -w ~/memory
+python cli.py sync -w ~/memory --source ~/.openclaw/agents/main/sessions
+python cli.py sync -w ~/memory --parallel 20
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--clean` | Delete all summaries and model assignments before running |
-| `--max-obs` | Maximum observations to process (for testing) |
-| `--max-tier` | Maximum tier to build (e.g., 1 = only tier 0 and 1) |
-| `--parallel` | Number of parallel workers (default: 10) |
+| `-w`, `--workspace` | Workspace directory (required) |
+| `--db` | Database filename (default: pyramid.db) |
+| `--source` | Path to sessions directory for incremental import |
+| `--parallel`, `-p` | Number of parallel workers (default: 10) |
 
-### `embed`
-Generate embeddings for all observations and summaries.
-
-```bash
-python cli.py embed
-python cli.py embed --parallel 20  # More parallel workers
-python cli.py embed --force        # Re-embed everything
-```
-
-| Flag | Description |
-|------|-------------|
-| `--parallel` | Number of parallel workers for batch processing (default: 10) |
-| `--force` | Clear existing embeddings and re-embed everything |
-
-Embeddings are batched by token count (max 250k tokens per request) and item count (max 2048 items per request) and processed in parallel.
+**What sync does:**
+1. If `--source` provided: incrementally import new messages from OpenClaw sessions
+2. Assign unassigned observations to models
+3. Create new tier-0 summaries (groups of 10 observations)
+4. Create higher-tier summaries (groups of 10 lower-tier summaries)
+5. Process dirty summaries (regenerate if inputs changed)
+6. Embed new observations and summaries
+7. Synthesize dirty models
+8. Write markdown files to workspace
 
 ### `search`
 Semantic search across memory with optional temporal weighting.
 
 ```bash
-python cli.py search "What programming languages does the user prefer?"
-python cli.py search "user's family" --limit 10 --raw
-python cli.py search "recent projects" --time-weight 0.5  # favor recent results
-python cli.py search "historical facts" --time-weight 0   # pure semantic
+python cli.py search -w ~/memory "What programming languages does the user prefer?"
+python cli.py search -w ~/memory "user's family" --limit 10 --raw
+python cli.py search -w ~/memory "recent projects" --time-weight 0.5  # favor recent results
+python cli.py search -w ~/memory "historical facts" --time-weight 0   # pure semantic
 ```
 
 | Flag | Description |
 |------|-------------|
+| `-w`, `--workspace` | Workspace directory (required) |
+| `--db` | Database filename (default: pyramid.db) |
 | `--limit` | Number of results (default: 20) |
 | `--raw` | Show raw results without LLM synthesis |
-| `--time-weight` | Time decay weight from 0-1 (default: 0.3). 0 = pure semantic similarity, 1 = heavy recency bias. Uses exponential decay with 30-day half-life. |
+| `--time-weight` | Time decay weight from 0-1 (default: 0.3). 0 = pure semantic similarity, 1 = heavy recency bias. |
 
-## Generate
+### Internal Commands
 
-The `generate` command generates markdown files from models for workspace integration. By default, it synthesizes each model's pyramid into coherent narrative prose.
+For debugging and manual control. Accessed via `cli.py internal COMMAND`.
 
-**Important:** `SOUL.md` and `USER.md` are identity files that should be hand-crafted. Generate does NOT overwrite them. Instead, the synthesized assistant and user memories go into `MEMORY.md`.
+#### `internal summarize`
+Run summarization only.
 
 ```bash
-python cli.py generate /path/to/workspace --db pyramid.db
+python cli.py internal summarize -w ~/memory
+python cli.py internal summarize -w ~/memory --max-obs 100  # Limit observations
+python cli.py internal summarize -w ~/memory --max-tier 1   # Only build up to tier 1
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--db` | Path to database file (default: pyramid.db) |
-| `--debug` | Include source info (tier, id, date range) |
-| `--no-synthesize` | Skip LLM synthesis, just concatenate summaries |
-| `--parallel`, `-p` | Number of parallel workers for synthesis (default: 10) |
+#### `internal embed`
+Generate embeddings only.
 
-### Output Files
+```bash
+python cli.py internal embed -w ~/memory
+python cli.py internal embed -w ~/memory --force  # Re-embed everything
+```
+
+#### `internal generate`
+Write markdown files from cached synthesis (no LLM calls).
+
+```bash
+python cli.py internal generate -w ~/memory
+```
+
+#### `internal synthesize`
+Synthesize dirty models without writing files.
+
+```bash
+python cli.py internal synthesize -w ~/memory
+```
+
+## Output Files
 
 | Output | Contents |
 |--------|----------|
@@ -506,81 +501,16 @@ Synthesized memory from conversations. SOUL.md and USER.md are identity files an
 - [models/person-b.md](models/person-b.md): Person B - description
 ```
 
-The synthesized content:
-- Deduplicates repeated facts
-- Uses newer details over older ones
-- Preserves important historical context
-- Written in third-person narrative prose (first-person for `assistant`)
-
-### `heartbeat`
-🦞 Incremental sync from OpenClaw sessions. Detects new content, imports, summarizes, embeds, and regenerates workspace files for affected models. **This is your main ongoing command.**
-
-```bash
-python cli.py heartbeat /path/to/workspace
-python cli.py heartbeat /path/to/workspace --parallel 10
-python cli.py heartbeat /path/to/workspace --source /custom/sessions
-python cli.py heartbeat /path/to/workspace --no-generate
-python cli.py heartbeat /path/to/workspace --init  # bootstrap without importing
-```
-
-| Flag | Description |
-|------|-------------|
-| `--source` | Path to sessions directory (default: ~/.openclaw/agents/main/sessions) |
-| `--parallel` | Number of parallel workers (default: 10) |
-| `--no-generate` | Skip workspace file regeneration |
-| `--init` | Mark all current session files as processed without importing (for bootstrap) |
-
-**Bootstrapping:**
-
-If you've already imported conversations via another method (e.g., `import --glenn`), use `--init` to mark OpenClaw session files as processed:
-
-```bash
-# After importing from another source, mark openclaw sessions as baseline
-python cli.py heartbeat /path/to/workspace --init
-
-# Future heartbeats will only pick up new content
-python cli.py heartbeat /path/to/workspace
-```
-
-Note: `import --openclaw` automatically tracks files, so `--init` is only needed when bootstrapping from non-OpenClaw sources.
-
-**How it works:**
-
-1. Tracks processed session files in `imported_sessions` table (file path, size, mtime)
-2. On each run, stats session files to detect changes
-3. For changed files, reads only new bytes (seeks to last position)
-4. Extracts observations from new messages
-5. Runs tier 0 summarization (and higher tiers if thresholds met)
-6. Embeds new observations and summaries
-7. Regenerates workspace files only for affected models
-
-**Speed optimizations:**
-
-- Unchanged files are skipped entirely (fast stat check)
-- Only new bytes are read from changed files
-- Summarization, embedding, and synthesis are incremental
-- Only affected models trigger workspace regeneration
-
-**Example output:**
-```
-Heartbeat: 3 changed files, 47 new messages
-Extracted 12 observations
-Created 1 tier 0 summaries
-Embedded 13 items
-Regenerating 2 affected models...
-Regenerated: MEMORY.md, models/project-x.md
-Done
-```
-
 ## Module Reference
 
 ### `db.py`
 SQLAlchemy models and database initialization.
 
-- `Model`, `Observation`, `Summary`, `ImportedSession` - ORM classes
+- `Model`, `Observation`, `Summary`, `SummarySource`, `ImportedSession` - ORM classes
 - `get_engine(db_path)` - Create SQLAlchemy engine
 - `get_session(db_path)` - Create session
-- `init_db(db_path)` - Initialize tables and base models
+- `init_db(db_path)` - Initialize tables, run migrations, create base models
+- `migrate_db(db_path)` - Add new columns to existing databases
 
 ### `llm.py`
 LLM integration for observation extraction.
@@ -593,120 +523,100 @@ LLM integration for observation extraction.
 - `extract_observations(messages, on_progress, max_workers)` - Main extraction entry point
 
 ### `summarize.py`
-Summarization pipeline.
+Summarization pipeline with dirty tracking.
 
 - `STEP` - Items per summary (10)
 - `assign_models_to_observations(session, observations)` - Model assignment
-- `summarize_observations(observations, model_name, model_description)` - Tier 0 summarization
-- `summarize_summaries(summaries, model_name, model_description)` - Higher tier summarization
-- `run_tier0_summarization(on_progress, max_workers, max_obs)` - Run tier 0
-- `run_higher_tier_summarization(on_progress, max_workers, max_tier)` - Run tiers 1+
-- `run_all_summarization(on_progress, max_workers, max_tier, max_obs)` - Run complete pipeline
+- `mark_model_dirty(session, model_id)` - Mark model for re-synthesis
+- `mark_overlapping_summaries_dirty(session, model_id, timestamp)` - Mark affected summaries
+- `record_summary_sources(session, summary, source_type, source_ids)` - Track what went into a summary
+- `propagate_dirty_upward(session, summary)` - Mark parent summaries dirty
+- `run_tier0_summarization(db_path, on_progress, max_workers)` - Run tier 0
+- `run_higher_tier_summarization(db_path, on_progress, max_workers)` - Run tiers 1+
+- `process_dirty_tier0(db_path, on_progress, max_workers)` - Regenerate dirty tier-0 summaries
+- `process_dirty_higher_tiers(db_path, on_progress, max_workers)` - Regenerate dirty higher-tier summaries
+- `process_all_dirty(db_path, on_progress, max_workers)` - Process all dirty summaries
 
 ### `pyramid.py`
 Pyramid retrieval and synthesis.
 
 - `get_pyramid(session, model_id)` - Returns dict of tier → summaries
 - `get_unsummarized_observations(session, model_id, by_tier)` - Get observations not yet in tier 0
-- `get_non_overlapping_summaries(by_tier)` - Filter summaries to avoid tier overlap (uses highest tier for older content, lower tiers only for recent content not yet covered)
+- `get_non_overlapping_summaries(by_tier)` - Filter summaries to avoid tier overlap
 - `synthesize_model(name, description, by_tier, unsummarized_obs)` - Generate coherent mental model narrative
+- `prepare_model_data(session, model, ref_date)` - Prepare data for synthesis
+- `synthesize_dirty_models(db_path, on_progress, max_workers)` - Synthesize all dirty models, cache results
 
 ### `embeddings.py`
 Vector embedding utilities.
 
 - `EMBEDDING_MODEL` - Model name
 - `EMBEDDING_DIM` - Dimension count (1536)
-- `MAX_TOKENS_PER_REQUEST` - Token limit per API call (250k)
-- `MAX_ITEMS_PER_REQUEST` - Item limit per API call (2048)
-- `TIME_DECAY_HALF_LIFE_DAYS` - Half-life for temporal decay (30 days)
-- `format_temporal_prefix(timestamp, end_timestamp)` - Generate temporal prefix string (e.g., "In June 2025: ")
-- `enrich_for_embedding(text, timestamp, end_timestamp)` - Prepend temporal context to text for embedding
-- `estimate_tokens(text)` - Estimate token count
-- `batch_by_tokens(texts, max_tokens, max_items)` - Split texts into batches respecting both limits
-- `get_embedding(text)` - Generate single embedding
+- `enrich_for_embedding(text, timestamp, end_timestamp)` - Prepend temporal context
 - `embed_many(texts, max_workers, on_progress)` - Batch embed with parallel processing
-- `serialize_embedding(embedding)` - Convert to bytes
-- `deserialize_embedding(blob)` - Convert bytes to list
-- `enable_vec(conn)` - Load sqlite-vec extension
-- `init_memory_vec(conn)` - Create memory_vec virtual table
-- `get_existing_embeddings(conn)` - Get already embedded items
-- `store_embeddings(conn, items, embeddings)` - Store embeddings in database
-- `compute_time_penalty(timestamp, half_life_days)` - Exponential decay penalty based on age
 - `search_memory(conn, query_text, limit, time_weight)` - Search memory with temporal reranking
 
 ### `loaders.py`
 Message loading from various formats.
 
-- `DEFAULT_OPENCLAW_PATH` - Default path to 🦞 OpenClaw sessions (~/.openclaw/agents/main/sessions)
-- `get_week_key(timestamp_str)` - Extract ISO week key from timestamp
-- `group_messages_by_week(messages)` - Group messages by week
 - `load_glenn_messages(source, conversation, user, limit)` - Load from Glenn SQLite format
 - `load_claude_messages(source, limit)` - Load from Claude JSON export
 - `load_openclaw_messages(source, limit)` - Load from OpenClaw JSONL sessions
-- `get_openclaw_file_stats(source)` - Get current file sizes/mtimes for tracking
 - `load_openclaw_incremental(source, session_tracking)` - Load only new messages since last sync
 
 ### `generate.py`
-Markdown generation with synthesis.
+Markdown generation from cached synthesis.
 
-- `CORE_MODELS` - List of core model names (assistant, user) that go in MEMORY.md
-- `TIER_LABELS` - Display labels for tiers
+- `CORE_MODELS` - List of core model names (assistant, user)
 - `update_model_descriptions(session, on_progress)` - Fill in missing descriptions
 - `render_memory(assistant_content, user_content, other_models)` - Generate MEMORY.md content
-- `synthesize_model_content(data)` - LLM synthesis for a model
-- `render_model_content(data, debug)` - Raw rendering without synthesis
-- `render_model_file(data, content)` - Wrap content in model file format
-- `export_models(workspace, db_path, debug, do_synthesize, on_progress, model_ids)` - Main export function (model_ids filters to specific models)
+- `render_model_file(model)` - Generate model file from cached synthesis
+- `export_models(workspace, db_path, on_progress, model_ids)` - Main export function
+
+### `sync.py`
+Orchestration for the sync command.
+
+- `embed_new_items(db_path, on_progress, max_workers)` - Embed items without embeddings
+- `write_model_files(db_path, workspace, on_progress)` - Write markdown files
+- `sync(workspace, db, source, on_progress, max_workers)` - Main sync function
 
 ### `cli.py`
-Command-line interface (thin wrapper over logic modules).
+Command-line interface with 4 main commands and internal subgroup.
 
-## Processing Flow
+## Processing Flows
 
-### Import Flow
+### Sync Flow
 ```
-Source file → load_glenn_messages/load_claude_messages → chunk_messages
-           → process_chunk (parallel) → observations
-           → assign_models_to_observations → run_tier0_summarization
-           → run_higher_tier_summarization
-```
-
-### Summarization Flow
-```
-Unassigned observations → assign_model calls → model assignment
-Observations (groups of 10) → summarize_observations → Tier 0 summaries
-Tier N summaries (groups of 10) → summarize_summaries → Tier N+1 summaries
+sync command
+├── If --source: load_openclaw_incremental → extract_observations → save to DB
+├── run_tier0_summarization (assign + create new tier-0 summaries)
+├── run_higher_tier_summarization (create new higher-tier summaries)
+├── process_all_dirty (regenerate dirty summaries)
+├── embed_new_items (embed new observations/summaries)
+├── synthesize_dirty_models (synthesize dirty models, cache results)
+└── export_models (write markdown files from cached synthesis)
 ```
 
-### Embedding Flow
+### Dirty Propagation Flow
 ```
-Observation/Summary → enrich_for_embedding (prepend temporal prefix)
-                   → "In June 2025: User relocated to Austin"
-                   → get_embedding → store in memory_vec
-```
+New observation added
+└── Model marked content_dirty = True
 
-Temporal enrichment prepends context like "In June 2025: " to text before embedding. This makes the embedding space temporally aware, so queries like "what happened in June?" naturally find content from that time period via semantic similarity.
+Summary regenerated
+├── Record sources in summary_sources
+├── Parent summaries marked is_dirty = True
+└── Model marked content_dirty = True
+
+Model synthesized
+├── Result cached in synthesized_content
+└── content_dirty = False
+```
 
 ### Search Flow
 ```
 Query → get_embedding → memory_vec MATCH → candidates (3x limit)
      → fetch timestamps → compute_time_penalty → rerank by combined score
      → fetch Observation/Summary objects → LLM synthesis → answer
-```
-
-### Generate Flow
-```
-Models → update_model_descriptions → get_pyramid + get_unsummarized_observations
-      → synthesize_model (parallel) → write_if_changed → markdown files
-```
-
-### Heartbeat Flow
-```
-Session files → stat check → changed files only
-             → seek to last_size → read new lines → parse messages
-             → extract_observations → run_tier0_summarization
-             → run_higher_tier_summarization → embed new items
-             → export_models (affected only) → update imported_sessions
 ```
 
 ## Configuration
@@ -762,4 +672,4 @@ sqlite-vec      # Vector similarity search (pip installs this, it's a loadable S
 pytest          # Testing
 ```
 
-🦞 **Note for agents**: `pip install -r requirements.txt` handles everything including sqlite-vec. The extension is automatically loaded when needed. No manual SQLite compilation required.
+**Note for agents**: `pip install -r requirements.txt` handles everything including sqlite-vec. The extension is automatically loaded when needed. No manual SQLite compilation required.

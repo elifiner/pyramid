@@ -11,6 +11,8 @@ class Model(Base):
     name = Column(String, unique=True, nullable=False)
     description = Column(Text)
     is_base = Column(Boolean, default=False)
+    synthesized_content = Column(Text)
+    content_dirty = Column(Boolean, default=True)
     
     observations = relationship('Observation', back_populates='model')
     summaries = relationship('Summary', back_populates='model')
@@ -36,8 +38,21 @@ class Summary(Base):
     text = Column(Text, nullable=False)
     start_timestamp = Column(DateTime, nullable=False)
     end_timestamp = Column(DateTime, nullable=False)
+    is_dirty = Column(Boolean, default=False)
     
     model = relationship('Model', back_populates='summaries')
+    sources = relationship('SummarySource', back_populates='summary', cascade='all, delete-orphan')
+
+
+class SummarySource(Base):
+    __tablename__ = 'summary_sources'
+    
+    id = Column(Integer, primary_key=True)
+    summary_id = Column(Integer, ForeignKey('summaries.id'), nullable=False)
+    source_type = Column(String, nullable=False)
+    source_id = Column(Integer, nullable=False)
+    
+    summary = relationship('Summary', back_populates='sources')
 
 
 class ImportedSession(Base):
@@ -65,9 +80,38 @@ BASE_MODELS = {
 }
 
 
+def migrate_db(db_path):
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute("PRAGMA table_info(models)")
+    model_cols = {row[1] for row in cursor.fetchall()}
+    if 'synthesized_content' not in model_cols:
+        cursor.execute("ALTER TABLE models ADD COLUMN synthesized_content TEXT")
+    if 'content_dirty' not in model_cols:
+        cursor.execute("ALTER TABLE models ADD COLUMN content_dirty BOOLEAN DEFAULT 1")
+    
+    cursor.execute("PRAGMA table_info(summaries)")
+    summary_cols = {row[1] for row in cursor.fetchall()}
+    if 'is_dirty' not in summary_cols:
+        cursor.execute("ALTER TABLE summaries ADD COLUMN is_dirty BOOLEAN DEFAULT 0")
+    
+    conn.commit()
+    conn.close()
+
+
 def init_db(db_path='pyramid.db'):
+    from pathlib import Path
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    db_exists = Path(db_path).exists()
+    
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
+    
+    if db_exists:
+        migrate_db(db_path)
     
     session = get_session(db_path)
     
@@ -84,7 +128,7 @@ def init_db(db_path='pyramid.db'):
     for name, description in BASE_MODELS.items():
         existing = session.query(Model).filter_by(name=name).first()
         if not existing:
-            session.add(Model(name=name, description=description, is_base=True))
+            session.add(Model(name=name, description=description, is_base=True, content_dirty=True))
         else:
             existing.description = description
     session.commit()
